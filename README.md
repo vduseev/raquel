@@ -6,7 +6,7 @@ Tired of complex job queues for distributed computing or event based systems?
 Do you want full visibility and complete reliability of your job queue?
 Raquel is a perfect solution for a distributed task queue and background workers.
 
-* **Simple**: Use existing or standalone SQL database. Just a **single** table!
+* **Simple**: Use **any** existing or standalone SQL database. Just a **single** table!
 * **Freedom**: Schedule whatever you want however you want. No frameworks, no restrictions.
 * **Reliable**: Uses SQL transactions and handles exceptions, retries, and "at least once" execution. SQL guarantees persistent jobs.
 * **Transparent**: Full visibility into which jobs are runnning, which failed and why, which are pending, etc.
