@@ -1,26 +1,18 @@
 from datetime import datetime, timezone
 
 from raquel import Raquel
-from .fixtures import rq
+from .fixtures import sqlite
 
 
-def test_basic_enqueue(rq: Raquel):
-    # Make sure the queue doesn't exist
-    assert not rq.list_queues()
-
+def test_get_job_exists(sqlite: Raquel):
     # Perform ENQUEUE
-    rq.enqueue("default", {"foo": "bar"})
+    sqlite.enqueue({"foo": "bar"})
 
-    # Make sure the queue exists
-    assert "default" in rq.list_queues().keys()
-
-    # Make sure the job exists
-    jobs = rq.list_jobs("default")
-    assert len(jobs) == 1
-    job = jobs[0]
+    # Get the job
+    job = sqlite.get_job(1)
     assert job.queue == "default"
     assert job.payload == {"foo": "bar"}
-    assert job.status == "queued"
+    assert job.status == sqlite.QUEUED
     assert job.max_age == None
     assert job.max_retry_count == None
     assert job.enqueued_at <= datetime.now(timezone.utc)
@@ -30,46 +22,59 @@ def test_basic_enqueue(rq: Raquel):
     assert job.finished_at == None
 
 
-def test_basic_dequeue(rq: Raquel):
-    # Perform ENQUEUE
-    rq.enqueue("default", {"foo": "bar"})
-
-    # Perform DEQUEUE
-    with rq.dequeue("default") as job:
-        assert job.queue == "default"
-        assert job.payload == {"foo": "bar"}
-        assert job.status == "locked"
-        assert job.max_age == None
-        assert job.max_retry_count == None
-        assert job.enqueued_at <= datetime.now(timezone.utc)
-        assert job.enqueued_at == job.scheduled_at
-        assert job.attempts == 0
-        assert job.locked_at <= datetime.now(timezone.utc)
-        assert job.finished_at == None
-
-    # Make sure the job is not in the queue
-    assert not rq.acquire_job("default")
-
-
-def test_get_job_exists(rq: Raquel):
-    # Perform ENQUEUE
-    rq.enqueue("default", {"foo": "bar"})
-
+def test_get_job_does_not_exist(sqlite: Raquel):
     # Get the job
-    job = rq.get_job(1)
-    assert job.queue == "default"
-    assert job.payload == {"foo": "bar"}
-    assert job.status == "queued"
-    assert job.max_age == None
-    assert job.max_retry_count == None
-    assert job.enqueued_at <= datetime.now(timezone.utc)
-    assert job.enqueued_at == job.scheduled_at
-    assert job.attempts == 0
-    assert job.locked_at == None
-    assert job.finished_at == None
-
-
-def test_get_job_does_not_exist(rq: Raquel):
-    # Get the job
-    job = rq.get_job(1)
+    job = sqlite.get_job(1)
     assert job is None
+
+
+def test_job_acquire_order(sqlite: Raquel):
+    # Enqueue multiple jobs
+    sqlite.enqueue({"foo": 1})
+    sqlite.enqueue({"foo": 2}, queue="default")
+    assert sqlite.count_jobs() == 2
+    assert sqlite.count_jobs("default", sqlite.QUEUED) == 2
+
+    # Acquire the jobs
+    job1 = sqlite.acquire_job("default")
+    assert job1.status == sqlite.LOCKED
+    assert job1.payload == {"foo": 1}
+    assert sqlite.count_jobs("default") == 2
+    assert sqlite.count_jobs("default", sqlite.QUEUED) == 1
+    assert sqlite.count_jobs("default", sqlite.LOCKED) == 1
+
+    job2 = sqlite.acquire_job()
+    assert job2.status == sqlite.LOCKED
+    assert job2.payload == {"foo": 2}
+    assert sqlite.count_jobs("default") == 2
+    assert sqlite.count_jobs("default", sqlite.QUEUED) == 0
+    assert sqlite.count_jobs("default", sqlite.LOCKED) == 2
+
+
+def test_job_dequeue_order(sqlite: Raquel):
+    # Enqueue multiple jobs
+    sqlite.enqueue({"foo": 1})
+    sqlite.enqueue({"foo": 2})
+    assert sqlite.count_jobs("default") == 2
+    assert sqlite.count_jobs("default", sqlite.QUEUED) == 2
+
+    # Dequeue the jobs
+    with sqlite.dequeue("default") as job1:
+        assert job1.status == sqlite.LOCKED
+        assert job1.payload == {"foo": 1}
+        assert sqlite.count_jobs("default") == 2
+        assert sqlite.count_jobs("default", sqlite.QUEUED) == 1
+        assert sqlite.count_jobs("default", sqlite.LOCKED) == 1
+
+    with sqlite.dequeue("default") as job2:
+        assert job2.status == sqlite.LOCKED
+        assert job2.payload == {"foo": 2}
+        assert sqlite.count_jobs("default") == 2
+        assert sqlite.count_jobs("default", sqlite.QUEUED) == 0
+        assert sqlite.count_jobs("default", sqlite.LOCKED) == 1
+        assert sqlite.count_jobs("default", sqlite.SUCCESS) == 1
+
+    assert sqlite.count_jobs("default") == 2
+    assert sqlite.count_jobs("default", sqlite.QUEUED) == 0
+    assert sqlite.count_jobs("default", sqlite.LOCKED) == 0
+    assert sqlite.count_jobs("default", sqlite.SUCCESS) == 2

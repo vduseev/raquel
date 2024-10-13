@@ -1,3 +1,10 @@
+# Artifacts
+*.db
+
+# Thumbnail cache files
+.DS_Store
+Thumbs.db
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

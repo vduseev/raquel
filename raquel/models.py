@@ -1,28 +1,19 @@
-import enum
 import json
 import logging
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 
 logger = logging.getLogger(__name__)
 
 
-class Dialect(str, enum.Enum):
-    SQLITE = "sqlite"
-    POSTGRES = "postgres"
-    MYSQL = "mysql"
-    ORACLE = "oracle"
-    MSSQL = "mssql"
-
-
 @dataclass
 class Job:
-    id: int
     queue: str
+    id: int | None = field(default=None)
     payload: Any | None = field(default=None)
-    status: str | None = field(default=None)
+    status: Literal['queued', 'locked', 'success', 'failed', 'cancelled'] | None = field(default=None)
     max_age: int | None = field(default=None)
     max_retry_count: int = field(default=20)
     max_retry_exponent: int = field(default=32)
