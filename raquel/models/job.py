@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from .params import EnqueueParams
+
 
 logger = logging.getLogger(__name__)
 
@@ -52,13 +54,7 @@ class Job:
         ) = row
         
         # Attempt to deserialize the payload
-        payload = None
-        if serialized_payload:
-            try:
-                payload = json.loads(serialized_payload)
-            except json.JSONDecodeError:
-                logger.debug(f"Failed to deserialize payload using JSON: {serialized_payload}")
-                payload = serialized_payload
+        payload = Job.deserialize_payload(serialized_payload)
 
         # Convert epoch timestamps in milliseconds to datetime objects
         enqueued_at_ts = datetime.fromtimestamp(enqueued_at / 1000, timezone.utc)
@@ -89,26 +85,30 @@ class Job:
 
         return job
 
-
-@dataclass
-class QueueStats:
-    name: str
-    total: int
-    queued: int
-    locked: int
-    success: int
-    failed: int
-    cancelled: int
-
     @staticmethod
-    def from_row(row: tuple) -> "QueueStats":
-        name, total, queued, locked, success, failed, cancelled = row
-        return QueueStats(
-            name=name,
-            total=total,
-            queued=queued,
-            locked=locked,
-            success=success,
-            failed=failed,
-            cancelled=cancelled,
+    def from_enqueue_params(job_id: int, enqueue_params: EnqueueParams) -> "Job":
+        payload = Job.deserialize_payload(enqueue_params.serialized_payload)
+        return Job(
+            id=job_id,
+            queue=enqueue_params.queue,
+            payload=payload,
+            status="queued",
+            max_age=enqueue_params.max_age_ms,
+            max_retry_count=enqueue_params.max_retry_count,
+            max_retry_exponent=enqueue_params.max_retry_exponent,
+            min_retry_delay=enqueue_params.min_retry_delay,
+            max_retry_delay=enqueue_params.max_retry_delay,
+            enqueued_at=datetime.fromtimestamp(enqueue_params.enqueued_at_ms / 1000, timezone.utc),
+            scheduled_at=datetime.fromtimestamp(enqueue_params.scheduled_at_ms / 1000, timezone.utc),
         )
+    
+    @staticmethod
+    def deserialize_payload(serialized_payload: str | None) -> Any | None:
+        if not serialized_payload:
+            return None
+
+        try:
+            return json.loads(serialized_payload)
+        except json.JSONDecodeError:
+            logger.debug(f"Failed to deserialize payload using JSON: {serialized_payload}")
+            return serialized_payload

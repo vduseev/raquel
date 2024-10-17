@@ -1,10 +1,10 @@
 from .base import QueriesBase
 
 
-class SQLiteQueries(QueriesBase):
-    create_jobs_table = """
+class PostgresQueries(QueriesBase):
+    create_jobs_table =  """
 CREATE TABLE IF NOT EXISTS jobs (
-    id INTEGER PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     queue TEXT NOT NULL DEFAULT 'default',
     payload TEXT,
     status TEXT NOT NULL DEFAULT 'queued',
@@ -14,8 +14,12 @@ CREATE TABLE IF NOT EXISTS jobs (
     max_retry_exponent INTEGER DEFAULT 32,
     min_retry_delay INTEGER NOT NULL DEFAULT 1000,
     max_retry_delay INTEGER NOT NULL DEFAULT 43200000,
-    enqueued_at BIGINT NOT NULL,
-    scheduled_at BIGINT NOT NULL,
+    enqueued_at BIGINT NOT NULL DEFAULT CAST(
+        EXTRACT(epoch from (NOW() AT TIME ZONE 'UTC')) * 1000 AS BIGINT
+    ),
+    scheduled_at BIGINT NOT NULL DEFAULT CAST(
+        EXTRACT(epoch from (NOW() AT TIME ZONE 'UTC')) * 1000 AS BIGINT
+    ),
     attempts INTEGER NOT NULL DEFAULT 0,
     failed_error TEXT,
     failed_traceback TEXT,
@@ -53,7 +57,7 @@ INSERT INTO jobs (
   max_retry_delay,
   enqueued_at,
   scheduled_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 RETURNING id
 """
 
@@ -77,7 +81,7 @@ SELECT
     locked_at,
     finished_at
 FROM jobs
-WHERE id = ?
+WHERE id = %s
 """
 
     select_jobs = """
@@ -100,7 +104,7 @@ SELECT
     locked_at,
     finished_at
 FROM jobs
-WHERE queue = ?
+WHERE queue = %s
 ORDER BY scheduled_at DESC
 """
 
@@ -108,15 +112,15 @@ ORDER BY scheduled_at DESC
 SELECT
     COUNT(*)
 FROM jobs
-WHERE queue = ?
+WHERE queue = %s
 """
 
     select_jobs_count_status = """
 SELECT
     COUNT(*)
 FROM jobs
-WHERE queue = ?
-  AND status = ?
+WHERE queue = %s
+  AND status = %s
 """
 
     select_oldest_job = """
@@ -140,20 +144,22 @@ SELECT
     finished_at
 FROM jobs
 WHERE
-    queue = ?
+    queue = %s
     AND (status = 'queued' OR status = 'failed')
-    AND scheduled_at <= ?
+    AND scheduled_at <= %s
     AND (
         max_age IS NULL
-        OR enqueued_at + max_age >= ?
+        OR enqueued_at + max_age >= %s
     )
 ORDER BY scheduled_at ASC
+LIMIT 1
+FOR UPDATE SKIP LOCKED
 """
 
     select_queues = """
 SELECT
     queue,
-    SUM(id) AS total,
+    SUM(1) AS total,
     SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS queued,
     SUM(CASE WHEN status = 'locked' THEN 1 ELSE 0 END) AS locked,
     SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success,
@@ -167,29 +173,40 @@ GROUP BY queue
 UPDATE jobs
 SET
     status = 'locked',
-    locked_at = ?,
-    locked_by = ?
-WHERE id = ?
+    locked_at = %s,
+    locked_by = %s
+WHERE id = %s
 """
 
     update_job_done = """
 UPDATE jobs
 SET
-    status = ?,
-    attempts = ?,
-    cancelled_reason = ?,
-    finished_at = ?
-WHERE id = ?
+    status = %s,
+    attempts = %s,
+    cancelled_reason = %s,
+    finished_at = %s
+WHERE id = %s
+"""
+
+    update_jobs_cancel_expired = """
+UPDATE jobs
+SET
+    status = 'cancelled',
+    cancelled_reason = 'expired'
+WHERE
+    status = 'queued'
+    AND max_age IS NOT NULL
+    AND enqueued_at + max_age <= %s
 """
 
     update_job_retry = """
 UPDATE jobs
 SET
     status = 'queued',
-    scheduled_at = ?,
-    attempts = ?,
-    failed_error = ?,
-    failed_traceback = ?,
-    finished_at = ?
-WHERE id = ?
+    scheduled_at = %s,
+    attempts = %s,
+    failed_error = %s,
+    failed_traceback = %s,
+    finished_at = %s
+WHERE id = %s
 """

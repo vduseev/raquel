@@ -14,4 +14,5 @@ class QueriesBase:
     select_queues = NotImplemented
     update_job_lock = NotImplemented
     update_job_done = NotImplemented
+    update_jobs_cancel_expired = NotImplemented
     update_job_retry = NotImplemented
