@@ -6,20 +6,24 @@ class QueueStats:
     name: str
     total: int
     queued: int
-    locked: int
+    claimed: int
     success: int
     failed: int
+    expired: int
+    exhausted: int
     cancelled: int
 
     @staticmethod
     def from_row(row: tuple) -> "QueueStats":
-        name, total, queued, locked, success, failed, cancelled = row
+        name, total, queued, claimed, success, failed, expired, exhausted, cancelled = row
         return QueueStats(
             name=name,
             total=total,
             queued=queued,
-            locked=locked,
+            claimed=claimed,
             success=success,
             failed=failed,
+            expired=expired,
+            exhausted=exhausted,
             cancelled=cancelled,
         )

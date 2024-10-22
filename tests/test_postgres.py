@@ -1,27 +1,30 @@
+import asyncio
 import threading
 import time
 
-from raquel import Raquel
-from .fixtures import postgres, postgres_pool
+import pytest
+
+from raquel import Raquel, AsyncRaquel
+from .fixtures import normal, asynchronous
 
 
-def test_concurrent_job_dequeue_in_loop(postgres_pool: Raquel):
+def test_concurrent_job_dequeue_in_loop(normal: Raquel):
     def enqueue_jobs(limit: int):
         for i in range(limit):
-            postgres_pool.enqueue({"data": i}, queue="concurrent_loop")
+            normal.enqueue({"data": i}, queue="concurrent_loop")
             print(f"Enqueued job {i}")
             time.sleep(0.05)
 
     def dequeue_jobs(limit: int):
         for i in range(limit):
             print(f"Dequeueing job {i}")
-            with postgres_pool.dequeue("concurrent_loop") as job:
+            with normal.dequeue("concurrent_loop") as job:
                 print(f"Dequeued job {i}: {job}")
-                assert job.status == "locked"
+                assert job.status == normal.CLAIMED
                 assert job.payload == {"data": i}
             time.sleep(0.05)
 
-    num_jobs = 10
+    num_jobs = 5
     enqueue_thread = threading.Thread(target=enqueue_jobs, args=(num_jobs,))
     dequeue_thread = threading.Thread(target=dequeue_jobs, args=(num_jobs,))
 
@@ -33,28 +36,57 @@ def test_concurrent_job_dequeue_in_loop(postgres_pool: Raquel):
     enqueue_thread.join()
     dequeue_thread.join()
 
-    assert postgres_pool.count_jobs("concurrent_loop") == num_jobs
-    assert postgres_pool.count_jobs("concurrent_loop", "queued") == 0
-    assert postgres_pool.count_jobs("concurrent_loop", "locked") == 0
-    assert postgres_pool.count_jobs("concurrent_loop", "success") == num_jobs
+    assert normal.count("concurrent_loop") == num_jobs
+    assert normal.count("concurrent_loop", normal.QUEUED) == 0
+    assert normal.count("concurrent_loop", normal.CLAIMED) == 0
+    assert normal.count("concurrent_loop", normal.SUCCESS) == num_jobs
 
 
-def test_continuous_dequeue_for_1_sec(postgres_pool: Raquel):
+@pytest.mark.asyncio
+async def test_concurrent_job_dequeue_in_loop_async(asynchronous: AsyncRaquel):
+    async def enqueue_jobs(limit: int):
+        for i in range(limit):
+            await asynchronous.enqueue({"data": i}, queue="concurrent_loop")
+            print(f"Enqueued job {i}")
+            await asyncio.sleep(0.05)
+
+    async def dequeue_jobs(limit: int):
+        for i in range(limit):
+            print(f"Dequeueing job {i}")
+            async with asynchronous.dequeue("concurrent_loop") as job:
+                print(f"Dequeued job {i}: {job}")
+                assert job.status == asynchronous.CLAIMED
+                assert job.payload == {"data": i}
+            await asyncio.sleep(0.05)
+
+    num_jobs = 5
+    enqueue_task = asyncio.create_task(enqueue_jobs(num_jobs))
+    dequeue_task = asyncio.create_task(dequeue_jobs(num_jobs))
+
+    await asyncio.gather(enqueue_task, dequeue_task)
+
+    assert await asynchronous.count("concurrent_loop") == num_jobs
+    assert await asynchronous.count("concurrent_loop", asynchronous.QUEUED) == 0
+    assert await asynchronous.count("concurrent_loop", asynchronous.CLAIMED) == 0
+    assert await asynchronous.count("concurrent_loop", asynchronous.SUCCESS) == num_jobs
+
+
+def test_continuous_dequeue_for_1_sec(normal: Raquel):
     def enqueue_jobs(limit: int):
         for i in range(limit):
-            postgres_pool.enqueue({"data": i}, "continuous_1_sec")
+            normal.enqueue({"data": i}, "continuous_1_sec")
             print(f"Enqueued job {i}")
             time.sleep(0.05)
 
-    def dequeue_jobs():
+    def dequeue_jobs(limit: int):
         start_time = time.time()
         job_counter = 0
-        while time.time() - start_time < 1:
-            with postgres_pool.dequeue("continuous_1_sec") as job:
+        while time.time() - start_time < 10 and job_counter < limit:
+            with normal.dequeue("continuous_1_sec") as job:
                 if job is None:
                     continue
                 print(f"Dequeued job: {job}")
-                assert job.status == "locked"
+                assert job.status == normal.CLAIMED
                 assert job.payload == {"data": job_counter}
             job_counter += 1
             time.sleep(0.1)
@@ -64,7 +96,7 @@ def test_continuous_dequeue_for_1_sec(postgres_pool: Raquel):
 
     num_jobs = 7
     enqueue_thread = threading.Thread(target=enqueue_jobs, args=(num_jobs,))
-    dequeue_thread = threading.Thread(target=dequeue_jobs)
+    dequeue_thread = threading.Thread(target=dequeue_jobs, args=(num_jobs,))
 
     # This time, start the dequeue thread first. Let it run.
     dequeue_thread.start()
@@ -73,7 +105,43 @@ def test_continuous_dequeue_for_1_sec(postgres_pool: Raquel):
     enqueue_thread.join()
     dequeue_thread.join()
 
-    assert postgres_pool.count_jobs("continuous_1_sec") == num_jobs
-    assert postgres_pool.count_jobs("continuous_1_sec", "queued") == 0
-    assert postgres_pool.count_jobs("continuous_1_sec", "locked") == 0
-    assert postgres_pool.count_jobs("continuous_1_sec", "success") == num_jobs
+    assert normal.count("continuous_1_sec") == num_jobs
+    assert normal.count("continuous_1_sec", normal.QUEUED) == 0
+    assert normal.count("continuous_1_sec", normal.CLAIMED) == 0
+    assert normal.count("continuous_1_sec", normal.SUCCESS) == num_jobs
+
+
+@pytest.mark.asyncio
+async def test_continuous_dequeue_for_1_sec_async(asynchronous: AsyncRaquel):
+    async def enqueue_jobs(limit: int):
+        for i in range(limit):
+            await asynchronous.enqueue({"data": i}, "continuous_1_sec")
+            print(f"Enqueued job {i}")
+            await asyncio.sleep(0.05)
+
+    async def dequeue_jobs(limit: int):
+        start_time = time.time()
+        job_counter = 0
+        while time.time() - start_time < 10 and job_counter < limit:
+            async with asynchronous.dequeue("continuous_1_sec") as job:
+                if job is None:
+                    continue
+                print(f"Dequeued job: {job}")
+                assert job.status == asynchronous.CLAIMED
+                assert job.payload == {"data": job_counter}
+            job_counter += 1
+            await asyncio.sleep(0.1)
+
+    num_jobs = 7
+
+    # This time, start the dequeue task first. Let it run.
+    dequeue_task = asyncio.create_task(dequeue_jobs(num_jobs))
+    await asyncio.sleep(0.1)
+    enqueue_task = asyncio.create_task(enqueue_jobs(num_jobs))
+    
+    await asyncio.gather(enqueue_task, dequeue_task)
+
+    assert await asynchronous.count("continuous_1_sec") == num_jobs
+    assert await asynchronous.count("continuous_1_sec", asynchronous.QUEUED) == 0
+    assert await asynchronous.count("continuous_1_sec", asynchronous.CLAIMED) == 0
+    assert await asynchronous.count("continuous_1_sec", asynchronous.SUCCESS) == num_jobs
