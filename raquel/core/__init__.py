@@ -1,4 +1,5 @@
-from .docs import Raquel, AsyncRaquel, Job
+from .core_sync import Raquel
+from .core_async import AsyncRaquel
 
 
-__all__ = ["Raquel", "AsyncRaquel", "Job"]
+__all__ = ["Raquel", "AsyncRaquel"]

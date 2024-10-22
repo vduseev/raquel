@@ -1,79 +1,39 @@
 import logging
-import sqlite3
 
-import psycopg2
-import psycopg2.pool
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.ext.asyncio import create_async_engine
+import pytest_asyncio
 
-from raquel import Raquel
+from raquel import Raquel, AsyncRaquel
 
 
 @pytest.fixture
-def sqlite():
+def simple():
     logging.getLogger("raquel").setLevel(logging.DEBUG)
 
-    connection = sqlite3.connect(":memory:")
-    instance = Raquel(connection)
-    instance.setup()
+    instance = Raquel("sqlite://")
+    instance.create_all()
     return instance
 
 
 @pytest.fixture
-def postgres():
+def normal():
     logging.getLogger("raquel").setLevel(logging.DEBUG)
 
-    connection = psycopg2.connect(
-        host="localhost",
-        database="postgres",
-        user="postgres",
-        password="postgres",
-    )
-
-    instance = Raquel(connection)
-    instance.setup()
-    yield instance
-    instance.teardown()
+    instance = Raquel("postgresql+psycopg2://postgres:postgres@localhost/postgres")
+    try:
+        instance.create_all()
+        yield instance
+    finally:
+        instance.drop_all()
 
 
-@pytest.fixture(scope="session")
-def postgres_pool():
+@pytest_asyncio.fixture
+async def asynchronous():
     logging.getLogger("raquel").setLevel(logging.DEBUG)
 
-    pool = psycopg2.pool.ThreadedConnectionPool(
-        minconn=1,
-        maxconn=2,
-        host="localhost",
-        user="postgres",
-        password="postgres",
-    )
-
-    instance = Raquel(pool)
-    instance.setup()
-    yield instance
-    instance.teardown()
-
-
-@pytest.fixture(scope="session")
-def sqlalchemy_sync():
-    logging.getLogger("raquel").setLevel(logging.DEBUG)
-
-    engine = create_engine("postgresql+psycopg2://postgres:postgres@localhost/postgres")
-
-    instance = Raquel(engine)
-    instance.setup()
-    yield instance
-    instance.teardown()
-
-
-@pytest.fixture(scope="session")
-def sqlalchemy_async():
-    logging.getLogger("raquel").setLevel(logging.DEBUG)
-
-    engine = create_async_engine("postgresql+asyncpg://postgres:postgres@localhost/postgres")
-
-    instance = Raquel(engine)
-    instance.setup()
-    yield instance
-    instance.teardown()
+    instance = AsyncRaquel("postgresql+asyncpg://postgres:postgres@localhost/postgres")
+    try:
+        await instance.create_all()
+        yield instance
+    finally:
+        await instance.drop_all()

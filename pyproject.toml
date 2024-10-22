@@ -23,6 +23,11 @@ classifiers = [
 
 [tool.poetry.dependencies]
 python = "^3.10"
+sqlalchemy = "^2.0.36"
+greenlet = { version = "^3.1.1", optional = true }
+
+[tool.poetry.extras]
+asyncio = ["greenlet"]
 
 [tool.poetry.group.docs.dependencies]
 sphinx = "^8.0.2"
@@ -38,6 +43,7 @@ sqlalchemy = "^2.0.35"
 mysql-connector-python = "^9.0.0"
 pymssql = "^2.3.1"
 oracledb = "^2.4.1"
+pytest-asyncio = "^0.24.0"
 
 [build-system]
 requires = ["poetry-core"]
@@ -64,3 +70,7 @@ exclude_also = [
     "if TYPE_CHECKING:",
     "@(abc\\.)?abstractmethod",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

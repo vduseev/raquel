@@ -110,6 +110,14 @@ CREATE INDEX IF NOT EXISTS idx_jobs_scheduled_at ON jobs (scheduled_at);
 | **Schedule from anywhere** | Yes ✅ | No ❌ | No ❌ | Yes ✅ | No ❌ | Yes ✅ | Yes ✅ |
 | **Job payload size limit** | No ✅ | Yes ❌ | Yes ❌ | Yes ❌ | Yes ❌ | Yes ❌ | Yes ❌ |
 
+## Thinking behind Raquel
+
+* Random UUID (`uuid4`) is used as job ID, to facilitate migration between databases and HA setups.
+* Payload is stored as text, to allow any kind of data to be stored.
+* Job lock is performed by first selecting the first unclaimed job through `SELECT... WHERE status = 'queued'`
+  and then doing the `UPDATE... WHERE id = ?` query in the same transaction, to ensure atomicity.
+  When possible (in PostgreSQL or MySQL), `SELECT FOR UPDATE SKIP LOCKED` is used for more efficiency.
+* All timestamps are stored as milliseconds since epoch (UTC timezone). This removes any confusion about timezones.
 
 ## Other
 
