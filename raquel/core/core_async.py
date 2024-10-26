@@ -40,7 +40,7 @@ class AsyncRaquel(BaseRaquel):
         >>> await rq.create_all()
 
         Enqueue a job
-        >>> await rq.enqueue({"foo": "bar"})
+        >>> await rq.enqueue(payload={"foo": "bar"})
 
         Process jobs, one by one
         >>> while True:
@@ -52,12 +52,12 @@ class AsyncRaquel(BaseRaquel):
         Put the job back in the queue without processing it if you don't
         want to process it yet for some reason. For example, if the payload
         is empty.
-        >>> async with rq.dequeue() as job:
+        >>> async with rq.dequeue("my-tasks") as job:
         ...     if job and not job.payload:
         ...         await job.reject()
 
         Cancel the job before it is processed or between retries
-        >>> await job.cancel()
+        >>> await rq.cancel(job.id)
 
     Args:
         url (str): Database URL.
@@ -70,8 +70,8 @@ class AsyncRaquel(BaseRaquel):
 
     async def enqueue(
         self,
-        payload: Any | None = None,
         queue: str | None = None,
+        payload: Any | None = None,
         at: datetime | int | None = None,
         delay: int | timedelta | None = None,
         max_age: int | timedelta = None,
@@ -96,18 +96,18 @@ class AsyncRaquel(BaseRaquel):
         Examples:
 
             Enqueue a single job in the "default" queue for immediate processing
-            >>> await rq.enqueue({"foo": "bar"})
+            >>> await rq.enqueue(payload={"foo": "bar"})
 
             Enqueue an empty payload in the "my_jobs" queue
-            >>> await rq.enqueue(queue="my_jobs")
+            >>> await rq.enqueue("my_jobs")
 
             Enqueue a job object
             >>> job = Job(queue="ingest", payload="data", scheduled_at=now())
-            >>> await rq.enqueue(job)
+            >>> await rq.enqueue(payload=job)
 
         Args:
-            payload (Any | Job | None): Job payload. Defaults to None.
             queue (str): Name of the queue. Defaults to "default".
+            payload (Any | Job | None): Job payload. Defaults to None.
             at (datetime | int | None): Scheduled time (UTC). 
                 Defaults to ``now()``. The job will not be processed before
                 this time. You can pass a ``datetime`` object or a unix epoch
@@ -132,8 +132,8 @@ class AsyncRaquel(BaseRaquel):
             Job: The created job.
         """
         p = common.parse_enqueue_params(
-            payload,
             queue,
+            payload,
             at,
             delay,
             max_age,

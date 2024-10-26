@@ -13,7 +13,7 @@ def test_basic_enqueue(simple: Raquel):
     assert not simple.queues()
 
     # Perform ENQUEUE
-    simple.enqueue({"foo": "bar"}, queue="foo")
+    simple.enqueue("foo", {"foo": "bar"})
 
     # Make sure the queue exists
     assert "foo" in simple.queues()
@@ -41,7 +41,7 @@ async def test_basic_enqueue_async(asynchronous: AsyncRaquel):
     assert not await asynchronous.queues()
 
     # Perform ENQUEUE
-    await asynchronous.enqueue({"foo": "bar"}, queue="foo")
+    await asynchronous.enqueue("foo", {"foo": "bar"})
 
     # Make sure the queue exists
     assert "foo" in await asynchronous.queues()
@@ -67,7 +67,7 @@ def test_at_datetime_enqueue(simple: Raquel):
     delayed_by = 100  # milliseconds
     scheduled_at = datetime.now(timezone.utc) + timedelta(milliseconds=delayed_by)
     # Perform ENQUEUE
-    simple.enqueue({"foo": "bar"}, at=scheduled_at)
+    simple.enqueue(payload={"foo": "bar"}, at=scheduled_at)
 
     # Attempt to immediately dequeue the job
     assert not simple.claim()
@@ -85,7 +85,7 @@ async def test_at_datetime_enqueue_async(asynchronous: AsyncRaquel):
     delayed_by = 100
     scheduled_at = datetime.now(timezone.utc) + timedelta(milliseconds=delayed_by)
     # Perform ENQUEUE
-    await asynchronous.enqueue({"foo": "bar"}, at=scheduled_at)
+    await asynchronous.enqueue(payload={"foo": "bar"}, at=scheduled_at)
 
     # Attempt to immediately dequeue the job
     assert not await asynchronous.claim()
@@ -102,7 +102,7 @@ def test_at_int_enqueue(simple: Raquel):
     delayed_by = 100  # milliseconds
     at = int(datetime.now(timezone.utc).timestamp() * 1000) + delayed_by
     # Perform ENQUEUE
-    simple.enqueue({"foo": "bar"}, at=at)
+    simple.enqueue("default", {"foo": "bar"}, at=at)
 
     # Attempt to immediately dequeue the job
     assert not simple.claim()
@@ -120,7 +120,7 @@ async def test_at_int_enqueue_async(asynchronous: AsyncRaquel):
     delayed_by = 100
     at = int(datetime.now(timezone.utc).timestamp() * 1000) + delayed_by
     # Perform ENQUEUE
-    await asynchronous.enqueue({"foo": "bar"}, at=at)
+    await asynchronous.enqueue("default", {"foo": "bar"}, at=at)
 
     # Attempt to immediately dequeue the job
     assert not await asynchronous.claim()
@@ -136,7 +136,7 @@ async def test_at_int_enqueue_async(asynchronous: AsyncRaquel):
 def test_delayed_int_enqueue(simple: Raquel):
     delayed_by = 100  # milliseconds
     # Perform ENQUEUE
-    simple.enqueue({"foo": "bar"}, queue="default", delay=delayed_by)
+    simple.enqueue("default", {"foo": "bar"}, delay=delayed_by)
 
     # Attempt to immediately dequeue the job
     assert not simple.claim("default")
@@ -153,7 +153,7 @@ def test_delayed_int_enqueue(simple: Raquel):
 async def test_delayed_int_enqueue_async(asynchronous: AsyncRaquel):
     delayed_by = 100
     # Perform ENQUEUE
-    await asynchronous.enqueue({"foo": "bar"}, queue="default", delay=delayed_by)
+    await asynchronous.enqueue("default", {"foo": "bar"}, delay=delayed_by)
 
     # Attempt to immediately dequeue the job
     assert not await asynchronous.claim("default")
@@ -169,7 +169,7 @@ async def test_delayed_int_enqueue_async(asynchronous: AsyncRaquel):
 def test_delayed_timedelta_enqueue(simple: Raquel):
     delayed_by = timedelta(milliseconds=100)
     # Perform ENQUEUE
-    simple.enqueue({"foo": "bar"}, delay=delayed_by)
+    simple.enqueue("default", {"foo": "bar"}, delay=delayed_by)
 
     # Attempt to immediately dequeue the job
     assert not simple.claim("default")
@@ -186,7 +186,7 @@ def test_delayed_timedelta_enqueue(simple: Raquel):
 async def test_delayed_timedelta_enqueue_async(asynchronous: AsyncRaquel):
     delayed_by = timedelta(milliseconds=100)
     # Perform ENQUEUE
-    await asynchronous.enqueue({"foo": "bar"}, delay=delayed_by)
+    await asynchronous.enqueue("default", {"foo": "bar"}, delay=delayed_by)
 
     # Attempt to immediately dequeue the job
     assert not await asynchronous.claim("default")
@@ -203,8 +203,8 @@ def test_enqueue_in_the_past(simple: Raquel):
     scheduled_at = datetime.now(timezone.utc) - timedelta(hours=2)
     before = datetime.now(timezone.utc) - timedelta(hours=1)
     # Perform ENQUEUE
-    job1 = simple.enqueue(1)
-    job2 = simple.enqueue(2, at=scheduled_at)  # should be picked up first
+    job1 = simple.enqueue(payload=1)
+    job2 = simple.enqueue(payload=2, at=scheduled_at)  # should be picked up first
 
     # Attempt to immediately dequeue the job
     job = simple.claim("default", before=before)
@@ -217,8 +217,8 @@ async def test_enqueue_in_the_past_async(asynchronous: AsyncRaquel):
     scheduled_at = datetime.now(timezone.utc) - timedelta(hours=2)
     before = datetime.now(timezone.utc) - timedelta(hours=1)
     # Perform ENQUEUE
-    job1 = await asynchronous.enqueue(1)
-    job2 = await asynchronous.enqueue(2, at=scheduled_at)
+    job1 = await asynchronous.enqueue(payload=1)
+    job2 = await asynchronous.enqueue(payload=2, at=scheduled_at)
 
     # Attempt to immediately dequeue the job
     job = await asynchronous.claim("default", before=before)
@@ -249,7 +249,7 @@ async def test_no_payload_enqueue_async(asynchronous: AsyncRaquel):
 
 def test_str_payload_enqueue(simple: Raquel):
     # Perform ENQUEUE
-    simple.enqueue("foo", "default")
+    simple.enqueue("default", "foo")
 
     job = simple.claim("default")
     assert job.queue == "default"
@@ -260,7 +260,7 @@ def test_str_payload_enqueue(simple: Raquel):
 @pytest.mark.asyncio
 async def test_str_payload_enqueue_async(asynchronous: AsyncRaquel):
     # Perform ENQUEUE
-    await asynchronous.enqueue("foo", "default")
+    await asynchronous.enqueue("default", "foo")
 
     job = await asynchronous.claim("default")
     assert job.queue == "default"
@@ -275,7 +275,7 @@ def test_job_payload_enqueue(simple: Raquel):
     )
 
     # Perform ENQUEUE
-    job = simple.enqueue(job)
+    job = simple.enqueue(payload=job)
     assert job.queue == "job_queue"
     assert job.status == "queued"
     assert job.payload == 1
@@ -294,7 +294,7 @@ async def test_job_payload_enqueue_async(asynchronous: AsyncRaquel):
     )
 
     # Perform ENQUEUE
-    job = await asynchronous.enqueue(job)
+    job = await asynchronous.enqueue(payload=job)
     assert job.queue == "job_queue"
     assert job.status == "queued"
     assert job.payload == 1
@@ -308,7 +308,7 @@ async def test_job_payload_enqueue_async(asynchronous: AsyncRaquel):
 def test_max_age_timedelta_enqueue(simple: Raquel):
     max_age = timedelta(milliseconds=50)
     # Perform ENQUEUE
-    simple.enqueue({"foo": "bar"}, max_age=max_age)
+    simple.enqueue(payload={"foo": "bar"}, max_age=max_age)
 
     # Wait for the job to expire
     time.sleep(0.1)
@@ -321,7 +321,7 @@ def test_max_age_timedelta_enqueue(simple: Raquel):
 async def test_max_age_timedelta_enqueue_async(asynchronous: AsyncRaquel):
     max_age = timedelta(milliseconds=50)
     # Perform ENQUEUE
-    await asynchronous.enqueue({"foo": "bar"}, max_age=max_age)
+    await asynchronous.enqueue(payload={"foo": "bar"}, max_age=max_age)
 
     # Wait for the job to expire
     await asyncio.sleep(0.1)
@@ -333,7 +333,7 @@ async def test_max_age_timedelta_enqueue_async(asynchronous: AsyncRaquel):
 def test_max_age_int_enqueue(simple: Raquel):
     max_age = 50
     # Perform ENQUEUE
-    simple.enqueue({"foo": "bar"}, max_age=max_age)
+    simple.enqueue(payload={"foo": "bar"}, max_age=max_age)
 
     # Wait for the job to expire
     time.sleep(0.1)
@@ -346,7 +346,7 @@ def test_max_age_int_enqueue(simple: Raquel):
 async def test_max_age_int_enqueue_async(asynchronous: AsyncRaquel):
     max_age = 50
     # Perform ENQUEUE
-    await asynchronous.enqueue({"foo": "bar"}, max_age=max_age)
+    await asynchronous.enqueue(payload={"foo": "bar"}, max_age=max_age)
 
     # Wait for the job to expire
     await asyncio.sleep(0.1)

@@ -9,7 +9,7 @@ from .fixtures import normal, asynchronous
 
 
 def test_conflict_cancel(normal: Raquel):
-    job = normal.enqueue(1, queue="conflict_cancel")
+    job = normal.enqueue("conflict_cancel", 1)
 
     def dequeue_job():
         print(f"Dequeueing job...")
@@ -43,7 +43,7 @@ def test_conflict_cancel(normal: Raquel):
 
 @pytest.mark.asyncio
 async def test_conflict_cancel_async(asynchronous: AsyncRaquel):
-    job = await asynchronous.enqueue(1, queue="conflict_cancel")
+    job = await asynchronous.enqueue("conflict_cancel", 1)
 
     async def dequeue_job():
         print(f"Dequeueing job...")
@@ -69,7 +69,7 @@ async def test_conflict_cancel_async(asynchronous: AsyncRaquel):
 
 
 def test_nested_cancel(normal: Raquel):
-    job = normal.enqueue(1, queue="nested_cancel")
+    job = normal.enqueue("nested_cancel", 1)
 
     print(f"Dequeueing job...")
     with normal.dequeue("nested_cancel") as job:
@@ -85,7 +85,7 @@ def test_nested_cancel(normal: Raquel):
 
 @pytest.mark.asyncio
 async def test_nested_cancel_async(asynchronous: AsyncRaquel):
-    job = await asynchronous.enqueue(1, queue="nested_cancel")
+    job = await asynchronous.enqueue("nested_cancel", 1)
 
     print(f"Dequeueing job...")
     async with asynchronous.dequeue("nested_cancel") as job:

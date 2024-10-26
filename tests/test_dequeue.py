@@ -10,7 +10,7 @@ from .fixtures import simple, asynchronous
 
 def test_basic_dequeue(simple: Raquel):
     # Perform ENQUEUE
-    simple.enqueue({"foo": "bar"})
+    simple.enqueue("default", {"foo": "bar"})
 
     # Perform DEQUEUE
     with simple.dequeue() as job:
@@ -32,7 +32,7 @@ def test_basic_dequeue(simple: Raquel):
 @pytest.mark.asyncio
 async def test_basic_dequeue_async(asynchronous: AsyncRaquel):
     # Perform ENQUEUE
-    await asynchronous.enqueue({"foo": "bar"})
+    await asynchronous.enqueue("default", {"foo": "bar"})
 
     # Perform DEQUEUE
     async with asynchronous.dequeue() as job:
@@ -66,7 +66,7 @@ async def test_no_job_dequeue_async(asynchronous: AsyncRaquel):
 
 def test_max_age_in_time_dequeue(simple: Raquel):
     # Perform ENQUEUE
-    simple.enqueue({"foo": "bar"}, queue="default", max_age=1000)
+    simple.enqueue("default", {"foo": "bar"}, max_age=1000)
 
     # Attempt to immediately dequeue the job
     with simple.dequeue("default") as job:
@@ -77,7 +77,7 @@ def test_max_age_in_time_dequeue(simple: Raquel):
 @pytest.mark.asyncio
 async def test_max_age_in_time_dequeue_async(asynchronous: AsyncRaquel):
     # Perform ENQUEUE
-    await asynchronous.enqueue({"foo": "bar"}, queue="default", max_age=1000)
+    await asynchronous.enqueue("default", {"foo": "bar"}, max_age=1000)
 
     # Attempt to immediately dequeue the job
     async with asynchronous.dequeue("default") as job:
@@ -87,7 +87,7 @@ async def test_max_age_in_time_dequeue_async(asynchronous: AsyncRaquel):
 
 def test_reject(simple: Raquel):
     # Perform ENQUEUE
-    enqueued_job = simple.enqueue({"foo": "bar"}, queue="default")
+    enqueued_job = simple.enqueue("default", {"foo": "bar"})
 
     # Perform DEQUEUE
     with simple.dequeue("default") as job:
@@ -110,7 +110,7 @@ def test_reject(simple: Raquel):
 @pytest.mark.asyncio
 async def test_reject_async(asynchronous: AsyncRaquel):
     # Perform ENQUEUE
-    enqueued_job = await asynchronous.enqueue({"foo": "bar"}, queue="default")
+    enqueued_job = await asynchronous.enqueue("default", {"foo": "bar"})
 
     # Perform DEQUEUE
     async with asynchronous.dequeue("default") as job:
@@ -132,7 +132,7 @@ async def test_reject_async(asynchronous: AsyncRaquel):
 
 def test_fail(simple: Raquel):
     # Perform ENQUEUE
-    enqueued_job = simple.enqueue({"foo": "bar"}, queue="default")
+    enqueued_job = simple.enqueue("default", {"foo": "bar"})
 
     # Perform DEQUEUE
     with simple.dequeue("default") as job:
@@ -154,7 +154,7 @@ def test_fail(simple: Raquel):
 
 def test_catch_exception_and_fail(simple: Raquel):
     # Perform ENQUEUE
-    enqueued_job = simple.enqueue({"foo": "bar"}, queue="default")
+    enqueued_job = simple.enqueue("default", {"foo": "bar"})
 
     # Perform DEQUEUE
     with simple.dequeue("default") as job:
@@ -181,7 +181,7 @@ def test_catch_exception_and_fail(simple: Raquel):
 @pytest.mark.asyncio
 async def test_fail_async(asynchronous: AsyncRaquel):
     # Perform ENQUEUE
-    enqueued_job = await asynchronous.enqueue({"foo": "bar"}, queue="default")
+    enqueued_job = await asynchronous.enqueue("default", {"foo": "bar"})
 
     # Perform DEQUEUE
     async with asynchronous.dequeue("default") as job:

@@ -11,7 +11,7 @@ from .fixtures import normal, asynchronous
 def test_concurrent_job_dequeue_in_loop(normal: Raquel):
     def enqueue_jobs(limit: int):
         for i in range(limit):
-            normal.enqueue({"data": i}, queue="concurrent_loop")
+            normal.enqueue("concurrent_loop", {"data": i})
             print(f"Enqueued job {i}")
             time.sleep(0.05)
 
@@ -46,7 +46,7 @@ def test_concurrent_job_dequeue_in_loop(normal: Raquel):
 async def test_concurrent_job_dequeue_in_loop_async(asynchronous: AsyncRaquel):
     async def enqueue_jobs(limit: int):
         for i in range(limit):
-            await asynchronous.enqueue({"data": i}, queue="concurrent_loop")
+            await asynchronous.enqueue("concurrent_loop", {"data": i})
             print(f"Enqueued job {i}")
             await asyncio.sleep(0.05)
 
@@ -74,7 +74,7 @@ async def test_concurrent_job_dequeue_in_loop_async(asynchronous: AsyncRaquel):
 def test_continuous_dequeue_for_1_sec(normal: Raquel):
     def enqueue_jobs(limit: int):
         for i in range(limit):
-            normal.enqueue({"data": i}, "continuous_1_sec")
+            normal.enqueue("continuous_1_sec", {"data": i})
             print(f"Enqueued job {i}")
             time.sleep(0.05)
 
@@ -115,7 +115,7 @@ def test_continuous_dequeue_for_1_sec(normal: Raquel):
 async def test_continuous_dequeue_for_1_sec_async(asynchronous: AsyncRaquel):
     async def enqueue_jobs(limit: int):
         for i in range(limit):
-            await asynchronous.enqueue({"data": i}, "continuous_1_sec")
+            await asynchronous.enqueue("continuous_1_sec", {"data": i})
             print(f"Enqueued job {i}")
             await asyncio.sleep(0.05)
 

@@ -10,7 +10,7 @@ from .fixtures import simple, asynchronous
 
 def test_min_retry_delay_int_dequeue(simple: Raquel):
     # Perform ENQUEUE
-    simple.enqueue({"foo": "bar"}, queue="default", min_retry_delay=100)
+    simple.enqueue(payload={"foo": "bar"}, min_retry_delay=100)
 
     # Perform DEQUEUE
     with simple.dequeue() as job:
@@ -39,7 +39,7 @@ def test_min_retry_delay_int_dequeue(simple: Raquel):
 @pytest.mark.asyncio
 async def test_min_retry_delay_int_dequeue_async(asynchronous: AsyncRaquel):
     # Perform ENQUEUE
-    await asynchronous.enqueue({"foo": "bar"}, queue="default", min_retry_delay=100)
+    await asynchronous.enqueue(payload={"foo": "bar"}, min_retry_delay=100)
 
     # Perform DEQUEUE
     async with asynchronous.dequeue() as job:
@@ -68,8 +68,7 @@ async def test_min_retry_delay_int_dequeue_async(asynchronous: AsyncRaquel):
 def test_max_retry_delay_int_dequeue(simple: Raquel):
     # Perform ENQUEUE
     simple.enqueue(
-        {"foo": "bar"},
-        queue="default",
+        payload={"foo": "bar"},
         min_retry_delay=100,
         max_retry_delay=100,
     )
@@ -102,8 +101,7 @@ def test_max_retry_delay_int_dequeue(simple: Raquel):
 async def test_max_retry_delay_int_dequeue_async(asynchronous: AsyncRaquel):
     # Perform ENQUEUE
     await asynchronous.enqueue(
-        {"foo": "bar"},
-        queue="default",
+        payload={"foo": "bar"},
         min_retry_delay=100,
         max_retry_delay=100,
     )
@@ -135,8 +133,7 @@ async def test_max_retry_delay_int_dequeue_async(asynchronous: AsyncRaquel):
 def test_min_max_retry_delay_timedelta_dequeue(simple: Raquel):
     # Perform ENQUEUE
     simple.enqueue(
-        {"foo": "bar"},
-        queue="default",
+        payload={"foo": "bar"},
         min_retry_delay=timedelta(milliseconds=100),
         max_retry_delay=timedelta(milliseconds=100),
     )
@@ -169,8 +166,7 @@ def test_min_max_retry_delay_timedelta_dequeue(simple: Raquel):
 async def test_min_max_retry_delay_timedelta_dequeue_async(asynchronous: AsyncRaquel):
     # Perform ENQUEUE
     await asynchronous.enqueue(
-        {"foo": "bar"},
-        queue="default",
+        payload={"foo": "bar"},
         min_retry_delay=timedelta(milliseconds=100),
         max_retry_delay=timedelta(milliseconds=100),
     )

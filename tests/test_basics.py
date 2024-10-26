@@ -9,7 +9,7 @@ from .fixtures import simple, asynchronous
 
 def test_jobs(simple: Raquel):
     # Perform ENQUEUE
-    simple.enqueue({"foo": "bar"})
+    simple.enqueue(payload={"foo": "bar"})
 
     # Get the job
     job = simple.jobs()[0]
@@ -28,7 +28,7 @@ def test_jobs(simple: Raquel):
 @pytest.mark.asyncio
 async def test_jobs_async(asynchronous: AsyncRaquel):
     # Perform ENQUEUE
-    await asynchronous.enqueue({"foo": "bar"})
+    await asynchronous.enqueue(payload={"foo": "bar"})
 
     # Get the job
     job = (await asynchronous.jobs())[0]
@@ -59,8 +59,8 @@ async def test_get_nonexistent_async(asynchronous: AsyncRaquel):
 
 def test_claim_in_order(simple: Raquel):
     # Enqueue multiple jobs
-    simple.enqueue({"foo": 1})
-    simple.enqueue({"foo": 2}, queue="default")
+    simple.enqueue("default", {"foo": 1})
+    simple.enqueue("default", {"foo": 2})
     assert simple.count() == 2
     assert simple.count("default", simple.QUEUED) == 2
 
@@ -83,8 +83,8 @@ def test_claim_in_order(simple: Raquel):
 @pytest.mark.asyncio
 async def test_claim_in_order_async(asynchronous: AsyncRaquel):
     # Enqueue multiple jobs
-    await asynchronous.enqueue({"foo": 1})
-    await asynchronous.enqueue({"foo": 2}, queue="default")
+    await asynchronous.enqueue("default", {"foo": 1})
+    await asynchronous.enqueue("default", {"foo": 2})
     assert await asynchronous.count() == 2
     assert await asynchronous.count("default", asynchronous.QUEUED) == 2
 
@@ -106,7 +106,7 @@ async def test_claim_in_order_async(asynchronous: AsyncRaquel):
 
 def test_cancel(simple: Raquel):
     # Enqueue a job
-    job = simple.enqueue({"foo": 1})
+    job = simple.enqueue("default", {"foo": 1})
     assert simple.count() == 1
     assert simple.count("default", simple.QUEUED) == 1
 
@@ -119,7 +119,7 @@ def test_cancel(simple: Raquel):
 @pytest.mark.asyncio
 async def test_cancel_async(asynchronous: AsyncRaquel):
     # Enqueue a job
-    job = await asynchronous.enqueue({"foo": 1})
+    job = await asynchronous.enqueue("default", {"foo": 1})
     assert await asynchronous.count() == 1
     assert await asynchronous.count("default", asynchronous.QUEUED) == 1
 
@@ -131,8 +131,8 @@ async def test_cancel_async(asynchronous: AsyncRaquel):
 
 def test_dequeue_in_order(simple: Raquel):
     # Enqueue multiple jobs
-    simple.enqueue({"foo": 1})
-    simple.enqueue({"foo": 2})
+    simple.enqueue("default", {"foo": 1})
+    simple.enqueue("default", {"foo": 2})
     assert simple.count("default") == 2
     assert simple.count("default", simple.QUEUED) == 2
 
@@ -161,8 +161,8 @@ def test_dequeue_in_order(simple: Raquel):
 @pytest.mark.asyncio
 async def test_dequeue_in_order_async(asynchronous: AsyncRaquel):
     # Enqueue multiple jobs
-    await asynchronous.enqueue({"foo": 1})
-    await asynchronous.enqueue({"foo": 2})
+    await asynchronous.enqueue("default", {"foo": 1})
+    await asynchronous.enqueue("default", {"foo": 2})
     assert await asynchronous.count("default") == 2
     assert await asynchronous.count("default", asynchronous.QUEUED) == 2
 
@@ -190,9 +190,9 @@ async def test_dequeue_in_order_async(asynchronous: AsyncRaquel):
 
 def test_stats(simple: Raquel):
     # Enqueue multiple jobs
-    simple.enqueue({"foo": 1})
-    simple.enqueue({"foo": 2})
-    simple.enqueue({"foo": 3}, queue="other")
+    simple.enqueue("default", {"foo": 1})
+    simple.enqueue("default", {"foo": 2})
+    simple.enqueue("other", {"foo": 3})
     assert simple.count() == 3
     assert simple.count("other") == 1
 
@@ -218,9 +218,9 @@ def test_stats(simple: Raquel):
 @pytest.mark.asyncio
 async def test_stats_async(asynchronous: AsyncRaquel):
     # Enqueue multiple jobs
-    await asynchronous.enqueue({"foo": 1})
-    await asynchronous.enqueue({"foo": 2})
-    await asynchronous.enqueue({"foo": 3}, queue="other")
+    await asynchronous.enqueue("default", {"foo": 1})
+    await asynchronous.enqueue("default", {"foo": 2})
+    await asynchronous.enqueue("other", {"foo": 3})
     assert await asynchronous.count() == 3
     assert await asynchronous.count("other") == 1
 

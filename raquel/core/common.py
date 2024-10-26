@@ -29,8 +29,8 @@ def validate_status(status: str) -> None:
 
 
 def parse_enqueue_params(
-    payload: Any | list[Any] | None = None,
     queue: str | None = None,
+    payload: Any | list[Any] | None = None,
     at: datetime | int | None = None,
     delay: int | timedelta | None = None,
     max_age: int | timedelta = None,
@@ -42,8 +42,8 @@ def parse_enqueue_params(
     provided_payload = payload
 
     if isinstance(provided_payload, BaseJob):
-        payload = provided_payload.payload
         queue = queue or provided_payload.queue
+        payload = provided_payload.payload
         at = at or provided_payload.scheduled_at
         max_age = max_age or provided_payload.max_age
         max_retry_count = max_retry_count or provided_payload.max_retry_count

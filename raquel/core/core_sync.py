@@ -37,7 +37,7 @@ class Raquel(BaseRaquel):
         >>> rq.create_all()
 
         Enqueue a job
-        >>> rq.enqueue({"foo": "bar"})
+        >>> rq.enqueue(payload={"foo": "bar"})
 
         Process jobs, one by one
         >>> while True:
@@ -49,12 +49,12 @@ class Raquel(BaseRaquel):
         Put the job back in the queue without processing it if you don't
         want to process it yet for some reason. For example, if the payload
         is empty.
-        >>> with rq.dequeue() as job:
+        >>> with rq.dequeue("my-tasks) as job:
         ...     if job and not job.payload:
         ...         job.reject()
 
         Cancel the job before it is processed or between retries
-        >>> job.cancel()
+        >>> rq.cancel(job.id)
 
     Args:
         url (str): Database URL.
@@ -66,8 +66,8 @@ class Raquel(BaseRaquel):
 
     def enqueue(
         self,
-        payload: Any | None = None,
         queue: str | None = None,
+        payload: Any | None = None,
         at: datetime | int | None = None,
         delay: int | timedelta | None = None,
         max_age: int | timedelta = None,
@@ -92,18 +92,18 @@ class Raquel(BaseRaquel):
         Examples:
 
             Enqueue a single job in the "default" queue for immediate processing
-            >>> rq.enqueue({"foo": "bar"})
+            >>> rq.enqueue(payload={"foo": "bar"})
 
             Enqueue an empty payload in the "my_jobs" queue
-            >>> rq.enqueue(queue="my_jobs")
+            >>> rq.enqueue("my_jobs")
 
             Enqueue a job object
             >>> job = Job(queue="ingest", payload="data", scheduled_at=now())
-            >>> rq.enqueue(job)
+            >>> rq.enqueue(payload=job)
 
         Args:
-            payload (Any | Job | None): Job payload. Defaults to None.
             queue (str): Name of the queue. Defaults to "default".
+            payload (Any | Job | None): Job payload. Defaults to None.
             at (datetime | int | None): Scheduled time (UTC). 
                 Defaults to ``now()``. The job will not be processed before
                 this time. You can pass a ``datetime`` object or a unix epoch
@@ -128,8 +128,8 @@ class Raquel(BaseRaquel):
             Job: The created job.
         """
         p = common.parse_enqueue_params(
-            payload,
             queue,
+            payload,
             at,
             delay,
             max_age,
