@@ -152,6 +152,32 @@ def test_fail(simple: Raquel):
     assert updated_job.error == "Won't do"
 
 
+def test_catch_exception_and_fail(simple: Raquel):
+    # Perform ENQUEUE
+    enqueued_job = simple.enqueue({"foo": "bar"}, queue="default")
+
+    # Perform DEQUEUE
+    with simple.dequeue("default") as job:
+        assert job.queue == "default"
+        assert job.payload == {"foo": "bar"}
+        assert job.status == simple.CLAIMED
+        assert job.attempts == 0
+
+        try:
+            raise ValueError("Won't do")
+        except ValueError as e:
+            job.fail(e)
+
+    assert simple.count("default") == 1
+    assert simple.count("default", simple.FAILED) == 1
+
+    updated_job = simple.get(enqueued_job.id)
+    assert updated_job.attempts == 1
+    assert updated_job.status == simple.FAILED
+    assert updated_job.error == "Won't do"
+    assert updated_job.error_trace is not None
+
+
 @pytest.mark.asyncio
 async def test_fail_async(asynchronous: AsyncRaquel):
     # Perform ENQUEUE

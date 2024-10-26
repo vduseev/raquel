@@ -1,10 +1,8 @@
-import traceback
 from uuid import UUID
 from datetime import timedelta
 
 from sqlalchemy import update, Update
 
-from .base_sql import BaseSQL
 from .base_job import BaseJob
 from .raw_job import RawJob
 
@@ -52,7 +50,6 @@ class BaseRaquel:
         job: BaseJob,
         attempt_num: int,
         finished_at: int,
-        exception: Exception | None = None,
     ) -> Update:
         # Calculate when to schedule the next attempt
         exponent = min(attempt_num, job.max_retry_exponent)
@@ -65,21 +62,14 @@ class BaseRaquel:
             + timedelta(milliseconds=min(actual_delay, job.max_retry_delay))
         )
 
-        if exception:
-            stack_trace = "\n".join(traceback.format_exception(exception))
-            error = str(exception)
-        else:
-            stack_trace = None
-            error = job.error
-
         stmt = (
             update(RawJob)
             .where(RawJob.id == job.id)
             .values(
                 status=BaseRaquel.FAILED,
                 attempts=attempt_num,
-                error=error,
-                error_trace=stack_trace,
+                error=job.error,
+                error_trace=job.error_trace,
                 scheduled_at=int(schedule_at.timestamp() * 1000),
                 finished_at=finished_at,
             )

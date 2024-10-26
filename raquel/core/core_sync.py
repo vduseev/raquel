@@ -232,7 +232,7 @@ class Raquel(BaseRaquel):
                 logger.debug(f"Job {job.id} ran for {duration:.2f} seconds")
 
                 # Job processed successfully with no exceptions
-                if exception is None and job._failed is False:
+                if exception is None and not job._failed:
                     if job._rejected:
                         # Put the job back in the queue
                         stmt = self._reject_statement(job.id)
@@ -242,6 +242,11 @@ class Raquel(BaseRaquel):
 
                 # Job processing failed
                 else:
+                    # If the exception was not manually caught by the developer,
+                    # mark the job as failed.
+                    if exception:
+                        job.fail(exception)
+
                     if (
                         job.max_retry_count is not None
                         and attempt_num + 1 > job.max_retry_count
@@ -254,7 +259,7 @@ class Raquel(BaseRaquel):
                     else:
                         # Mark the job as failed and schedule the next attempt.
                         logger.debug(f"Rescheduling job {job.id}")
-                        stmt = self._failed_statement(job, attempt_num, finished_at_ms, exception)
+                        stmt = self._failed_statement(job, attempt_num, finished_at_ms)
 
                 session.execute(stmt)
                 session.commit()
@@ -452,7 +457,7 @@ class Raquel(BaseRaquel):
         self,
         job: Job,
         attempt_num: int = 1,
-        exception: BaseException | None = None,
+        exception: str | BaseException | None = None,
         finished_at: datetime | None = None,
     ) -> bool:
         """Mark the job as failed and reschedule it for another attempt.
@@ -461,23 +466,24 @@ class Raquel(BaseRaquel):
         are processing jobs outside the ``dequeue()`` context manager.
 
         **Warning**: This method should not be used inside the ``dequeue()``
-        context manager.
+        context manager. Use ``job.fail()`` method instead.
 
         Args:
             job (Job): The job that failed.
             attempt_num (int): Number of attempts it took to process this job.
                 Defaults to 1.
-            error (str | None): Error message.
-            error_trace (str | None): Error traceback. Defaults to None.
+            exception (str | BaseException | None): Error or exception.
             finished_at (datetime | None): Time when the job was finished.
                 Defaults to now (UTC).
         """
         common.validate_job_id(job.id)
+        job.fail(exception)
+
         with Session(self.engine) as session:
             if not finished_at:
                 finished_at = datetime.now(timezone.utc)
             finished_at_ms = int(finished_at.timestamp() * 1000)
-            stmt = self._failed_statement(job, attempt_num, finished_at_ms, exception)
+            stmt = self._failed_statement(job, attempt_num, finished_at_ms)
             result = session.execute(stmt)
             session.commit()
             return result.rowcount == 1

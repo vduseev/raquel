@@ -236,7 +236,7 @@ class AsyncRaquel(BaseRaquel):
                 logger.debug(f"Job {job.id} ran for {duration:.2f} seconds")
 
                 # Job processed successfully with no exceptions
-                if exception is None and job._failed is False:
+                if exception is None and not job._failed:
                     if job._rejected:
                         # Put the job back in the queue
                         stmt = self._reject_statement(job.id)
@@ -246,6 +246,11 @@ class AsyncRaquel(BaseRaquel):
 
                 # Job processing failed
                 else:
+                    # If the exception was not manually caught by the developer,
+                    # mark the job as failed.
+                    if exception:
+                        job.fail(exception)
+
                     if (
                         job.max_retry_count is not None
                         and attempt_num + 1 > job.max_retry_count
@@ -258,7 +263,7 @@ class AsyncRaquel(BaseRaquel):
                     else:
                         # Mark the job as failed and schedule the next attempt.
                         logger.debug(f"Rescheduling job {job.id}")
-                        stmt = self._failed_statement(job, attempt_num, finished_at_ms, exception)
+                        stmt = self._failed_statement(job, attempt_num, finished_at_ms)
 
                 await session.execute(stmt)
                 await session.commit()
