@@ -35,7 +35,7 @@ or simply a string.
 from raquel import Raquel
 
 rq = Raquel("postgresql+psycopg2://postgres:postgres@localhost/postgres")
-rq.enqueue('Hello, World!')
+rq.enqueue(queue="default", payload="Hello, World!")
 ```
 
 On the worker side, pick jobs from the queue and process them:
@@ -65,7 +65,7 @@ from raquel import AsyncRaquel
 rq = AsyncRaquel("postgresql+asyncpg://postgres:postgres@localhost/postgres")
 
 async def main():
-    await rq.enqueue({'my': {'name_is': 'Slim Shady'}})
+    await rq.enqueue("default", {'my': {'name_is': 'Slim Shady'}})
 
 asyncio.run(main())
 ```
@@ -171,7 +171,14 @@ By default, all jobs are placed into the `"default"` queue. You can specify
 the queue name when enqueuing a job:
 
 ```python
-rq.enqueue("Hello, World!", queue="my-queue")
+# Enqueue a payload into the "default" queue
+rq.enqueue(payload="Hello, World!")
+
+# Same as above
+rq.enqueue("default", "Hello, World!")
+
+# Enqueue a payload into the "my-queue" queue
+rq.enqueue("my-queue", "Hello, World!")
 ```
 
 When jobs are dequeued by a worker, they are dequeued from whatever queue,
@@ -181,7 +188,7 @@ manager:
 
 ```python
 while True:
-    with rq.dequeue(queue="my-queue") as job:
+    with rq.dequeue("my-queue") as job:
         if job:
             do_work(job.payload)
         time.sleep(1)
