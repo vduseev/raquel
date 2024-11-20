@@ -19,7 +19,7 @@ def simple():
 def normal():
     logging.getLogger("raquel").setLevel(logging.DEBUG)
 
-    instance = Raquel("postgresql+psycopg2://postgres:postgres@localhost/postgres")
+    instance = Raquel("postgresql+psycopg2://postgres:postgres@localhost:6432/postgres")
     try:
         instance.create_all()
         yield instance
@@ -31,7 +31,7 @@ def normal():
 async def asynchronous():
     logging.getLogger("raquel").setLevel(logging.DEBUG)
 
-    instance = AsyncRaquel("postgresql+asyncpg://postgres:postgres@localhost/postgres")
+    instance = AsyncRaquel("postgresql+asyncpg://postgres:postgres@localhost:6432/postgres")
     try:
         await instance.create_all()
         yield instance

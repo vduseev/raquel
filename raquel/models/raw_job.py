@@ -22,9 +22,9 @@ class RawJob(BaseSQL):
     status: Mapped[str] = mapped_column(String(30), nullable=False, default='queued', index=True)
     max_age: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     max_retry_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    max_retry_exponent: Mapped[int] = mapped_column(Integer, nullable=False, default=32)
     min_retry_delay: Mapped[int] = mapped_column(Integer, nullable=False, default=1000)
     max_retry_delay: Mapped[int] = mapped_column(Integer, nullable=False, default=12 * 3600 * 1000)
+    backoff_base: Mapped[int] = mapped_column(Integer, nullable=False, default=1000)
     enqueued_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ms)
     scheduled_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ms, index=True)
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -42,9 +42,9 @@ class RawJob(BaseSQL):
             status="queued",
             max_age=enqueue_params.max_age_ms,
             max_retry_count=enqueue_params.max_retry_count,
-            max_retry_exponent=enqueue_params.max_retry_exponent,
             min_retry_delay=enqueue_params.min_retry_delay,
             max_retry_delay=enqueue_params.max_retry_delay,
+            backoff_base=enqueue_params.backoff_base,
             enqueued_at=enqueue_params.enqueued_at_ms,
             scheduled_at=enqueue_params.scheduled_at_ms,
         )

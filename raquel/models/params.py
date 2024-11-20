@@ -7,9 +7,9 @@ class EnqueueParams:
     serialized_payload: str | None
     max_age_ms: int | None
     max_retry_count: int | None 
-    max_retry_exponent: int
     min_retry_delay: int
     max_retry_delay: int
+    backoff_base: int
     enqueued_at_ms: int
     scheduled_at_ms: int
 

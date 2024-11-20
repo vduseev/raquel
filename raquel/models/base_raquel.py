@@ -44,6 +44,44 @@ class BaseRaquel:
             .values(status=BaseRaquel.EXHAUSTED, attempts=attempt_num, finished_at=finished_at)
         )
         return stmt
+
+    @staticmethod
+    def _reschedule_statement(
+        job: BaseJob,
+        attempt_num: int,
+        status: str,
+        finished_at: int,
+    ) -> Update:
+        # Calculate when to schedule the next attempt
+        planned_delay = job.backoff_base * 2 ** attempt_num
+        # Clamp the delay to the min and max values
+        actual_delay = min(max(job.min_retry_delay, planned_delay), job.max_retry_delay)
+        # Compute how much time it took to process the job
+        duration = (finished_at - (job.claimed_at.timestamp() * 1000)) / 1000
+        # Reschedule based on this values
+        schedule_at = (
+            job.scheduled_at
+            + timedelta(seconds=duration)
+            + timedelta(milliseconds=actual_delay)
+        )
+
+        # Do not mark the job as finished if it's put back in the queue
+        # as a delayed job
+        finished_at_value = finished_at if status != BaseRaquel.QUEUED else None
+
+        stmt = (
+            update(RawJob)
+            .where(RawJob.id == job.id)
+            .values(
+                status=status,
+                attempts=attempt_num,
+                error=job.error,
+                error_trace=job.error_trace,
+                scheduled_at=int(schedule_at.timestamp() * 1000),
+                finished_at=finished_at_value,
+            )
+        )
+        return stmt
     
     @staticmethod
     def _failed_statement(
@@ -51,27 +89,9 @@ class BaseRaquel:
         attempt_num: int,
         finished_at: int,
     ) -> Update:
-        # Calculate when to schedule the next attempt
-        exponent = min(attempt_num, job.max_retry_exponent)
-        planned_delay = 2 ** exponent
-        actual_delay = max(job.min_retry_delay, planned_delay)
-        duration = (finished_at - (job.claimed_at.timestamp() * 1000)) / 1000
-        schedule_at = (
-            job.scheduled_at
-            + timedelta(seconds=duration)
-            + timedelta(milliseconds=min(actual_delay, job.max_retry_delay))
+        return BaseRaquel._reschedule_statement(
+            job=job,
+            attempt_num=attempt_num,
+            status=BaseRaquel.FAILED,
+            finished_at=finished_at,
         )
-
-        stmt = (
-            update(RawJob)
-            .where(RawJob.id == job.id)
-            .values(
-                status=BaseRaquel.FAILED,
-                attempts=attempt_num,
-                error=job.error,
-                error_trace=job.error_trace,
-                scheduled_at=int(schedule_at.timestamp() * 1000),
-                finished_at=finished_at,
-            )
-        )
-        return stmt

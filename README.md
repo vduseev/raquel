@@ -102,9 +102,9 @@ Here is what this table consists of:
 | status | TEXT | Status of the job. | No |
 | max_age | INTEGER | Maximum age of the job in milliseconds. | Yes |
 | max_retry_count | INTEGER | Maximum number of retries. | Yes |
-| max_retry_exponent | INTEGER | Exponential backoff factor. | No |
 | min_retry_delay | INTEGER | Minimum delay between retries in milliseconds. | No |
 | max_retry_delay | INTEGER | Maximum delay between retries in milliseconds. | No |
+| backoff_base | INTEGER | Base in milliseconds for exponential retry backoff. | No |
 | enqueued_at | BIGINT | Time when the job was enqueued in milliseconds since epoch (UTC). | No |
 | scheduled_at | BIGINT | Time when the job is scheduled to run in milliseconds since epoch (UTC). | No |
 | attempts | INTEGER | Number of attempts to run the job. | No |
@@ -217,40 +217,38 @@ The next retry is calculated as follows:
 * Add the time it took to process the job (aka duration).
 * Add the retry delay.
 
-Now, the retry delay is calculated as 2 to the power of number `attempts`
-(`2 ^ attempts`). However, the power is limited by the `max_retry_exponent` field,
-which defaults to 32. So, even if the number of attempts is 100, the *planned*
-retry delay will not exceed 2^32 milliseconds or about 50 days.
+Now, the retry delay is calculated as:
+
+```
+backoff_base * 2 ^ attempt
+```
 
 That's the *planned* retry delay. The *actual* retry delay is capped by the
 `min_retry_delay` and `max_retry_delay` fields. The `min_retry_delay` defaults
-to 1 second and the `max_retry_delay` defaults to 12 hours.
+to 1 second and the `max_retry_delay` defaults to 12 hours. The `backoff_base`
+defaults to 1 seconds as well.
 
 In other words, here is how your job will be retried (assuming there is
 always a worker available and the job takes almost no time to process):
 
 * *First retry:* in 1 second
-* *Second retry:* after 1 second 2 milliseconds
-* *Third retry:* after 1 second 4 milliseconds
+* *Second retry:* after 2 seconds following the first retry
+* *Third retry:* after 4 seconds
 * ...
-* *7'th retry:* after 1 second 128 milliseconds
+* *7'th retry:* after ~2 minutes
 * ...
-* *10'th retry:* after 2 seconds 24 milliseconds
-* *11'th retry:* after 3 seconds 48 milliseconds
+* *11'th retry:* after ~30 minutes
 * ...
-* *15'th retry:* after about 33.7 seconds
-* ...
-* *20'th retry:* after about 17.5 minutes
-* ...
-* *25'th retry:* after about 9 hours 19 minutes
-* ... and so on with the maximum delay of 12 hours, set by `max_retry_delay`.
+* *15'th retry:* after about 9 hours
+* ... and so on with the maximum delay of 12 hours, or whatever you set
+  for this job using `max_retry_delay` setting.
 
 In some tasks it makes sense to chill out a bit before retrying. For example,
-Firebase API's have a rate limit or some kind of a Cloud Function is not
-ready to reply immediately. In such cases, you can set the `min_retry_delay`
-to a higher value, such as 10 or 30 seconds.
+Firebase API's might have a rate limit or it could be that some data isn't
+ready yet. In such cases, you can set the `min_retry_delay` to a higher value,
+such as 10 or 30 seconds.
 
-Remeber, that all durations and timestampts are in milliseconds. So 10 seconds
+ℹ️ Remeber, that all durations and timestampts are in milliseconds. So 10 seconds
 is `10 * 1000 = 10000` milliseconds. 1 minute is `60 * 1000 = 60000` milliseconds.
 
 ## Prepare your database
@@ -260,10 +258,11 @@ automatically use the supported syntax for the database you are using (it is
 safe to run it multiple times, it only creates the table once.).
 
 ```python
+# Works for all databases
 rq.create_all()
 ```
 
-Alternatively, you can create the table manually. For example, in Postgres:
+Alternatively, you can create the table **manually**. For example, in **Postgres**:
 
 ```sql
 CREATE TABLE IF NOT EXISTS jobs (
@@ -273,9 +272,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     status TEXT NOT NULL DEFAULT 'queued',
     max_age BIGINT,
     max_retry_count INTEGER,
-    max_retry_exponent INTEGER NOT NULL DEFAULT 32,
     min_retry_delay INTEGER NOT NULL DEFAULT 1000,
     max_retry_delay INTEGER NOT NULL DEFAULT 43200000,
+    backoff_base INTEGER NOT NULL DEFAULT 1000,
     enqueued_at BIGINT NOT NULL DEFAULT extract(epoch from now()) * 1000,
     scheduled_at BIGINT NOT NULL DEFAULT extract(epoch from now()) * 1000,
     attempts INTEGER NOT NULL DEFAULT 0,
@@ -289,6 +288,45 @@ CREATE INDEX IF NOT EXISTS idx_jobs_queue ON jobs (queue);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs (status);
 CREATE INDEX IF NOT EXISTS idx_jobs_scheduled_at ON jobs (scheduled_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_claimed_by ON jobs (claimed_by);
+```
+
+Or, when using **Alembic**, add this to your `upgrade()` and `downgrade()` functions in
+the appropriate migration file:
+
+```python
+
+def upgrade() -> None:
+    op.create_table('jobs',
+    sa.Column('id', sa.UUID(), autoincrement=False, nullable=False),
+    sa.Column('queue', sa.VARCHAR(length=255), autoincrement=False, nullable=False),
+    sa.Column('payload', sa.VARCHAR(), autoincrement=False, nullable=True),
+    sa.Column('status', sa.VARCHAR(length=30), autoincrement=False, nullable=False),
+    sa.Column('max_age', sa.BIGINT(), autoincrement=False, nullable=True),
+    sa.Column('max_retry_count', sa.INTEGER(), autoincrement=False, nullable=True),
+    sa.Column('min_retry_delay', sa.INTEGER(), autoincrement=False, nullable=False),
+    sa.Column('max_retry_delay', sa.INTEGER(), autoincrement=False, nullable=False),
+    sa.Column('backoff_base', sa.INTEGER(), autoincrement=False, nullable=False),
+    sa.Column('enqueued_at', sa.BIGINT(), autoincrement=False, nullable=False),
+    sa.Column('scheduled_at', sa.BIGINT(), autoincrement=False, nullable=False),
+    sa.Column('attempts', sa.INTEGER(), autoincrement=False, nullable=False),
+    sa.Column('error', sa.VARCHAR(), autoincrement=False, nullable=True),
+    sa.Column('error_trace', sa.VARCHAR(), autoincrement=False, nullable=True),
+    sa.Column('claimed_by', sa.VARCHAR(length=255), autoincrement=False, nullable=True),
+    sa.Column('claimed_at', sa.BIGINT(), autoincrement=False, nullable=True),
+    sa.Column('finished_at', sa.BIGINT(), autoincrement=False, nullable=True),
+    sa.PrimaryKeyConstraint('id', name='jobs_pkey')
+    )
+    op.create_index('ix_jobs_status', 'jobs', ['status'], unique=False)
+    op.create_index('ix_jobs_scheduled_at', 'jobs', ['scheduled_at'], unique=False)
+    op.create_index('ix_jobs_queue', 'jobs', ['queue'], unique=False)
+    op.create_index('ix_jobs_claimed_by', 'jobs', ['claimed_by'], unique=False)
+
+def downgrade() -> None:
+    op.drop_index('ix_jobs_claimed_by', table_name='jobs')
+    op.drop_index('ix_jobs_queue', table_name='jobs')
+    op.drop_index('ix_jobs_scheduled_at', table_name='jobs')
+    op.drop_index('ix_jobs_status', table_name='jobs')
+    op.drop_table('jobs')
 ```
 
 ## Fun facts

@@ -35,9 +35,9 @@ def parse_enqueue_params(
     delay: int | timedelta | None = None,
     max_age: int | timedelta = None,
     max_retry_count: int | None = None,
-    max_retry_exponent: int | None = None,
     min_retry_delay: int | timedelta | None = None,
     max_retry_delay: int | timedelta | None = None,
+    backoff_base: int | timedelta | None = None,
 ) -> EnqueueParams:
     provided_payload = payload
 
@@ -47,22 +47,19 @@ def parse_enqueue_params(
         at = at or provided_payload.scheduled_at
         max_age = max_age or provided_payload.max_age
         max_retry_count = max_retry_count or provided_payload.max_retry_count
-        max_retry_exponent = max_retry_exponent or provided_payload.max_retry_exponent
         min_retry_delay = min_retry_delay or provided_payload.min_retry_delay
         max_retry_delay = max_retry_delay or provided_payload.max_retry_delay
+        backoff_base = backoff_base or provided_payload.backoff_base
 
     queue = queue or BaseRaquel.DEFAULT
     validate_queue_name(queue)
 
-    max_retry_exponent = max_retry_exponent or 32
-    if not isinstance(max_retry_exponent, int):
-        raise ValueError("max_retry_exponent must be an integer")
-    
     if max_retry_count and not isinstance(max_retry_count, int):
         raise ValueError("max_retry_count must be an integer")
 
     min_retry_delay = min_retry_delay or 1000
     max_retry_delay = max_retry_delay or 12 * 3600 * 1000
+    backoff_base = backoff_base or 1000
 
     # Determine the scheduled_at time
     now = datetime.now(timezone.utc)
@@ -89,6 +86,8 @@ def parse_enqueue_params(
         min_retry_delay = int(min_retry_delay.total_seconds() * 1000)
     if isinstance(max_retry_delay, timedelta):
         max_retry_delay = int(max_retry_delay.total_seconds() * 1000)
+    if isinstance(backoff_base, timedelta):
+        backoff_base = int(backoff_base.total_seconds() * 1000)
 
     if max_retry_delay < min_retry_delay:
         raise ValueError("max_retry_delay cannot be less than min_retry_delay")
@@ -102,9 +101,9 @@ def parse_enqueue_params(
         serialized_payload=serialized_payload,
         max_age_ms=max_age,
         max_retry_count=max_retry_count,
-        max_retry_exponent=max_retry_exponent,
         min_retry_delay=min_retry_delay,
         max_retry_delay=max_retry_delay,
+        backoff_base=backoff_base,
         enqueued_at_ms=enqueued_at_ms,
         scheduled_at_ms=scheduled_at_ms,
     )

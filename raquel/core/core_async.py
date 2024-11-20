@@ -76,9 +76,9 @@ class AsyncRaquel(BaseRaquel):
         delay: int | timedelta | None = None,
         max_age: int | timedelta = None,
         max_retry_count: int | None = None,
-        max_retry_exponent: int | None = None,
         min_retry_delay: int | timedelta | None = None,
         max_retry_delay: int | timedelta | None = None,
+        backoff_base: int | None = None,
     ) -> Job:
         """Enqueue a job for processing.
 
@@ -120,13 +120,14 @@ class AsyncRaquel(BaseRaquel):
                 it will not be processed at all. Defaults to None.
             max_retry_count (int | None): Maximum number of retries.
                 Defaults to None.
-            max_retry_exponent (int): Maximum retry delay exponent.
-                Defaults to 32. The delay between retries is calculated as
-                ``min_retry_delay * 2 ** min(attempt_num, max_retry_exponent)``.
             min_retry_delay (int | timedelta): Minimum retry delay.
                 Defaults to 1 second.
             max_retry_delay (int | timedelta): Maximum retry delay.
                 Defaults to 12 hours. Can't be less than ``min_retry_delay``.
+            backoff_base (int | timedelta | None): Base for exponential backoff.
+                Defaults to 1 second. The delay between retries is calculated as
+                ``backoff_base * 2 ** retry`` in milliseconds. Then it is
+                clamped between ``min_retry_delay`` and ``max_retry_delay``.
 
         Returns:
             Job: The created job.
@@ -138,9 +139,9 @@ class AsyncRaquel(BaseRaquel):
             delay,
             max_age,
             max_retry_count,
-            max_retry_exponent,
             min_retry_delay,
             max_retry_delay,
+            backoff_base=backoff_base,
         )
 
         # Insert the job
@@ -240,6 +241,9 @@ class AsyncRaquel(BaseRaquel):
                     if job._rejected:
                         # Put the job back in the queue
                         stmt = self._reject_statement(job.id)
+                    elif job._delay:
+                        # Reschedule the job for later
+                        stmt = self._reschedule_statement(job, attempt_num, self.QUEUED, finished_at_ms)
                     else:
                         # Update the job status to "success"
                         stmt = self._success_statement(job.id, attempt_num, finished_at_ms)

@@ -10,7 +10,11 @@ from .fixtures import simple, asynchronous
 
 def test_min_retry_delay_int_dequeue(simple: Raquel):
     # Perform ENQUEUE
-    simple.enqueue(payload={"foo": "bar"}, min_retry_delay=100)
+    simple.enqueue(
+        payload={"foo": "bar"},
+        min_retry_delay=100,
+        backoff_base=100,
+    )
 
     # Perform DEQUEUE
     with simple.dequeue() as job:
@@ -39,7 +43,11 @@ def test_min_retry_delay_int_dequeue(simple: Raquel):
 @pytest.mark.asyncio
 async def test_min_retry_delay_int_dequeue_async(asynchronous: AsyncRaquel):
     # Perform ENQUEUE
-    await asynchronous.enqueue(payload={"foo": "bar"}, min_retry_delay=100)
+    await asynchronous.enqueue(
+        payload={"foo": "bar"},
+        min_retry_delay=100,
+        backoff_base=100,
+    )
 
     # Perform DEQUEUE
     async with asynchronous.dequeue() as job:

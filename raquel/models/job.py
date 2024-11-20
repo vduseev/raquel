@@ -54,22 +54,23 @@ class Job(BaseJob):
     
     If the job fails, it will be retried up to this number of times.
     """
-    max_retry_exponent: int = field(default=32)
-    """The maximum retry delay exponent.
-    
-    The delay between retries is calculated as ``2 ** exponent`` milliseconds,
-    where ``exponent`` is either the current attempt number or this value,
-    whichever is smaller.
-    """
     min_retry_delay: int = field(default=1000)
     """The minimum retry delay.
 
     This is the minimum amount of time to wait before retrying a failed job.
+    The delay between retries won't be less than this value.
     """
     max_retry_delay: int = field(default=12 * 3600 * 1000)
     """The maximum retry delay.
 
     This is the maximum amount of time to wait before retrying a failed job.
+    The delay between retries won't exceed this value.
+    """
+    backoff_base: int = field(default=1000)
+    """The base delay for exponential backoff during retry.
+
+    The delay between retries is calculated as ``base * 2 ** retry`` in milliseconds.
+    Then it is clamped between ``min_retry_delay`` and ``max_retry_delay``.
     """
     enqueued_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     """The time when the job was enqueued.
@@ -107,6 +108,7 @@ class Job(BaseJob):
     """
     _rejected: bool = field(default=False)
     _failed: bool = field(default=False)
+    _delay: int | None = field(default=None)
 
     @staticmethod
     def from_raw_job(raw_job: RawJob) -> "Job":
@@ -126,9 +128,9 @@ class Job(BaseJob):
             status=raw_job.status,
             max_age=raw_job.max_age,
             max_retry_count=raw_job.max_retry_count,
-            max_retry_exponent=raw_job.max_retry_exponent,
             min_retry_delay=raw_job.min_retry_delay,
             max_retry_delay=raw_job.max_retry_delay,
+            backoff_base=raw_job.backoff_base,
             enqueued_at=enqueued_at_ts,
             scheduled_at=scheduled_at_ts,
             attempts=raw_job.attempts,
@@ -143,11 +145,12 @@ class Job(BaseJob):
     def reject(self) -> None:
         """Reject the job.
         
-        The lock is removed from the rejected job, allowing it to be claimed
-        by another worker. The ``scheduled_at`` timestamp remains the same.
+        The lock is removed from the rejected job, allowing it to be
+        **immediately** claimed by another worker. The ``scheduled_at``
+        timestamp remains the same.
 
-        **Warning:** This method should only be called inside the ``dequeue()``
-        context manager.
+        **Warning:** This method **should only be called** inside the
+        ``dequeue()`` context manager.
         """
         self._rejected = True
 
@@ -157,8 +160,8 @@ class Job(BaseJob):
         The job is marked as failed and the error message and stack trace
         are derived from the exception.
 
-        **Warning:** This method should only be called inside the ``dequeue()``
-        context manager.
+        **Warning:** This method **should only be called** inside the
+        ``dequeue()`` context manager.
 
         Args:
             exception (str | BaseException | None): The exception that caused
@@ -172,6 +175,22 @@ class Job(BaseJob):
             if isinstance(exception, BaseException):
                 stack_trace = "".join(traceback.format_exception(exception))
                 self.error_trace = stack_trace
+
+    def delay(self, delay: int | None = None) -> None:
+        """Delay the job.
+        
+        If you want the job to be processed at a later time, you can delay it
+        using this method. The job will remain in the queue and this attempt
+        won't count towards the maximum number of retries.
+
+        **Warning:** This method **should only be called** inside the
+        ``dequeue()`` context manager.
+
+        Args:
+            delay (int | None): The delay in milliseconds. If None, the job
+                will be delayed by ``min_retry_delay``.
+        """
+        self._delay = delay or self.min_retry_delay
     
     @staticmethod
     def deserialize_payload(serialized_payload: str | None) -> Any | None:
