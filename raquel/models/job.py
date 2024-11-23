@@ -2,7 +2,7 @@ import json
 import logging
 import traceback
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from uuid import uuid4, UUID
 from typing import Any, Literal
 
@@ -54,19 +54,19 @@ class Job(BaseJob):
     
     If the job fails, it will be retried up to this number of times.
     """
-    min_retry_delay: int = field(default=1000)
+    min_retry_delay: int | None = field(default=1000)
     """The minimum retry delay.
 
     This is the minimum amount of time to wait before retrying a failed job.
     The delay between retries won't be less than this value.
     """
-    max_retry_delay: int = field(default=12 * 3600 * 1000)
+    max_retry_delay: int | None = field(default=12 * 3600 * 1000)
     """The maximum retry delay.
 
     This is the maximum amount of time to wait before retrying a failed job.
     The delay between retries won't exceed this value.
     """
-    backoff_base: int = field(default=1000)
+    backoff_base: int | None = field(default=1000)
     """The base delay for exponential backoff during retry.
 
     The delay between retries is calculated as ``base * 2 ** retry`` in milliseconds.
@@ -108,7 +108,8 @@ class Job(BaseJob):
     """
     _rejected: bool = field(default=False)
     _failed: bool = field(default=False)
-    _delay: int | None = field(default=None)
+    _rescheduled: bool = field(default=False)
+    _rescheduled_at: datetime | None = field(default=None)
 
     @staticmethod
     def from_raw_job(raw_job: RawJob) -> "Job":
@@ -176,21 +177,60 @@ class Job(BaseJob):
                 stack_trace = "".join(traceback.format_exception(exception))
                 self.error_trace = stack_trace
 
-    def delay(self, delay: int | None = None) -> None:
-        """Delay the job.
+    def reschedule(
+        self,
+        delay: timedelta | int | None = None,
+        at: datetime | int | None = None,
+    ) -> None:
+        """Reschedule the job.
         
-        If you want the job to be processed at a later time, you can delay it
-        using this method. The job will remain in the queue and this attempt
-        won't count towards the maximum number of retries.
+        Reprocess the job at a later time. The job will remain in the queue
+        with a new scheduled execution time, and the current attempt won't
+        count towards the maximum number of retries.
+
+        If you leave both ``at`` and ``delay`` as None, the job will be
+        scheduled to be reprocessed after a minimal delay which defaults to
+        ``min_retry_delay`` value of the current job. If both are provided,
+        the new scheduled time will computed as ``at + delay``.
+
+        If you simply want to put the job back in the queue for immediate
+        reprocessing, use the ``reject()`` method instead.
 
         **Warning:** This method **should only be called** inside the
         ``dequeue()`` context manager.
 
         Args:
-            delay (int | None): The delay in milliseconds. If None, the job
-                will be delayed by ``min_retry_delay``.
+            delay (timedelta | int | None): Reprocess the job after the given
+                delay. You can pass a ``timedelta`` object or an integer
+                representing the delay in milliseconds. If None and ``at``
+                argument is not provided, the job will be delayed by
+                ``min_retry_delay``.
+            at (datetime | int | None): The time when the job should be
+                processed. You can pass a ``datetime`` object or a unix epoch
+                timestamp in milliseconds. Whatever is passed is considered
+                to be in UTC. If None, the job will be scheduled to be
+                reprocessed after a minimal delay.
         """
-        self._delay = delay or self.min_retry_delay
+        self._rescheduled = True
+
+        if at is None:
+            self._rescheduled_at = self.scheduled_at
+        elif isinstance(at, datetime):
+            self._rescheduled_at = at
+        elif isinstance(at, int):
+            self._rescheduled_at = datetime.fromtimestamp(at / 1000, timezone.utc)
+        else:
+            raise ValueError("Invalid value for 'at' argument. Expected datetime or int.")
+
+        delay_ms = 0
+        if at is None and delay is None:
+            delay_ms = self.min_retry_delay
+        elif isinstance(delay, int):
+            delay_ms = delay
+        elif isinstance(delay, datetime):
+            delay_ms = int(delay.total_seconds() * 1000)
+
+        self._rescheduled_at = self._rescheduled_at + timedelta(milliseconds=delay_ms)
     
     @staticmethod
     def deserialize_payload(serialized_payload: str | None) -> Any | None:

@@ -237,10 +237,9 @@ class Raquel(BaseRaquel):
                     if job._rejected:
                         # Put the job back in the queue
                         stmt = self._reject_statement(job.id)
-                    elif job._delay:
+                    elif job._rescheduled:
                         # Reschedule the job for later
-                        attempt = 0
-                        stmt = self._reschedule_statement(job, attempt, self.QUEUED, finished_at_ms)
+                        stmt = self._reschedule_statement(job, job._rescheduled_at)
                     else:
                         # Update the job status to "success"
                         stmt = self._success_statement(job.id, attempt_num, finished_at_ms)

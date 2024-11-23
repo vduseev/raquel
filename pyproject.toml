@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "raquel"
-version = "0.2.1"
+version = "0.2.2"
 description = "Simple Job Queues using SQL"
 authors = ["vduseev <vagiz@duseev.com>"]
 license = "Apache-2.0"

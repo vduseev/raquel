@@ -35,7 +35,7 @@ or simply a string.
 from raquel import Raquel
 
 rq = Raquel("postgresql+psycopg2://postgres:postgres@localhost/postgres")
-rq.enqueue(queue="default", payload="Hello, World!")
+rq.enqueue(queue"default", payload="Hello, World!")
 ```
 
 On the worker side, pick jobs from the queue and process them:
@@ -94,25 +94,25 @@ asyncio.run(main())
 Raquel only needs **a single table** to work. Can you believe it?
 Here is what this table consists of:
 
-| Column | Type | Description | Can be NULL |
-|--------|------|-------------|-------------|
-| id | UUID | Unique identifier of the job. | No |
-| queue | TEXT | Name of the queue. By default jobs are placed into the *"default"* queue. | No |
-| payload | TEXT | Payload of the job. It can by anything. Just needs to be serializable to text.| Yes |
-| status | TEXT | Status of the job. | No |
-| max_age | INTEGER | Maximum age of the job in milliseconds. | Yes |
-| max_retry_count | INTEGER | Maximum number of retries. | Yes |
-| min_retry_delay | INTEGER | Minimum delay between retries in milliseconds. | No |
-| max_retry_delay | INTEGER | Maximum delay between retries in milliseconds. | No |
-| backoff_base | INTEGER | Base in milliseconds for exponential retry backoff. | No |
-| enqueued_at | BIGINT | Time when the job was enqueued in milliseconds since epoch (UTC). | No |
-| scheduled_at | BIGINT | Time when the job is scheduled to run in milliseconds since epoch (UTC). | No |
-| attempts | INTEGER | Number of attempts to run the job. | No |
-| error | TEXT | Error message if the job failed. | Yes |
-| error_trace | TEXT | Error traceback if the job failed. | Yes |
-| claimed_by | TEXT | ID or name of the worked that claimed the job. | Yes |
-| claimed_at | BIGINT | Time when the job was claimed in milliseconds since epoch (UTC). | Yes |
-| finished_at | BIGINT | Time when the job was finished in milliseconds since epoch (UTC). | Yes |
+| Column | Type | Description | Default | Nullable |
+|--------|------|-------------|-------------|--------|
+| id | UUID | Unique identifier of the job. | | No |
+| queue | TEXT | Name of the queue. | `"default"` | No |
+| payload | TEXT | Payload of the job. It can by anything. Just needs to be serializable to text. | Null | Yes |
+| status | TEXT | Status of the job. | `"queued"` | No |
+| max_age | INTEGER | Maximum age of the job in milliseconds. | Null | Yes |
+| max_retry_count | INTEGER | Maximum number of retries. | Null | Yes |
+| min_retry_delay | INTEGER | Minimum delay between retries in milliseconds. | `1000` | Yes |
+| max_retry_delay | INTEGER | Maximum delay between retries in milliseconds. | `12 * 3600 * 1000` | Yes |
+| backoff_base | INTEGER | Base in milliseconds for exponential retry backoff. | `1000` | Yes |
+| enqueued_at | BIGINT | Time when the job was enqueued in milliseconds since epoch (UTC). | `now` | No |
+| scheduled_at | BIGINT | Time when the job is scheduled to run in milliseconds since epoch (UTC). | `now` | No |
+| attempts | INTEGER | Number of attempts to run the job. | `0` | No |
+| error | TEXT | Error message if the job failed. | Null | Yes |
+| error_trace | TEXT | Error traceback if the job failed. | Null | Yes |
+| claimed_by | TEXT | ID or name of the worked that claimed the job. | Null | Yes |
+| claimed_at | BIGINT | Time when the job was claimed in milliseconds since epoch (UTC). | Null | Yes |
+| finished_at | BIGINT | Time when the job was finished in milliseconds since epoch (UTC). | Null | Yes |
 
 ## Job status
 
@@ -129,7 +129,7 @@ retried, mening it will be rescheduled with an exponential backoff delay.
 * `expired` - Job was not picked up by a worker in time (when `max_age` is set).
 * `exhausted` - Job has reached the maximum number of retries (when `max_retry_count` is set).
 
-## How we guarantee that same job is not picked up by multiple workers?
+## How do we guarantee that same job is not picked up by multiple workers?
 
 When a worker picks up a job, it first selects the job from the table and then
 updates the job status to `claimed`. This is done in a single transaction, so
@@ -163,6 +163,83 @@ VALUES
     (uuid_generate_v4(), 'my-jobs', 'queued', '{"my": "payload"}'),
     (uuid_generate_v4(), 'my-jobs', 'queued', '101'),
     (uuid_generate_v4(), 'my-jobs', 'queued', 'Is this the real life?');
+```
+
+### Rescheduling a Job
+
+The `reschedule()` method is used to reprocess the job at a later time.
+The job will remain in the queue with a new scheduled execution time, and the
+current attempt won't count towards the maximum number of retries.
+This method should only be called inside the `dequeue()` context manager.
+
+```python
+with rq.dequeue("my-queue") as job:
+    if not job:
+        return
+
+    # Check if we have everything ready to process the job, and if not,
+    # reschedule the job to run 10 minutes from now
+    if not is_everything_ready_to_process(job.payload):
+        job.reschedule(delay=timedelta(minutes=10))
+
+    # Otherwise, process the job
+    do_work(job.payload)
+```
+
+The only things that change in the `jobs` table are the `scheduled_at` field,
+the `claimed_by` field (if `claim_as` was set), and the `claimed_at` field.
+
+Thus, you can find all rescheduled jobs by filtering for those that were
+claimed, but not finished, and didn't have an error.
+
+```sql
+SELECT * FROM jobs WHERE status = 'claimed' AND finished_at IS NULL AND error IS NULL;
+```
+
+Other ways to reschedule a job using the same `reschedule()` method:
+
+```python
+# Run when the next day starts
+job.reschedule(
+    at=datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1))
+
+# Same but using the `delay` parameter
+job.reschedule(
+    at=datetime.now().replace(hour=0, minute=0, second=0, microsecond=0),
+    delta=timedelta(days=1),
+)
+
+# Run in 500 milliseconds
+job.reschedule(delay=500)
+
+# Run in `min_retry_delay` milliseconds, as configured for this job
+# (default is 1 second)
+job.reschedule()
+```
+
+### Rejecting the Job
+
+In case your worker can't process the job for some reason, you can reject it,
+allowing it to be immediately claimed by another worker. This method should
+only be called inside the dequeue() context manager.
+
+The processing attempt won't count towards the maximum number of retries.
+Overall it will look like the job wasn't even attempted and the corresponding
+record in the `jobs` table will remain completely unchanged.
+
+```python
+with rq.dequeue("my-queue") as job:
+    if job:
+        return
+
+    # Maybe this worker doesn't have the necessary permissions to process
+    # this job.
+    if job.payload.get("requires_admin"):
+        job.reject()
+        return
+
+    # Otherwise, process the job
+    do_work(job.payload)
 ```
 
 ## Queue names
@@ -272,9 +349,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     status TEXT NOT NULL DEFAULT 'queued',
     max_age BIGINT,
     max_retry_count INTEGER,
-    min_retry_delay INTEGER NOT NULL DEFAULT 1000,
-    max_retry_delay INTEGER NOT NULL DEFAULT 43200000,
-    backoff_base INTEGER NOT NULL DEFAULT 1000,
+    min_retry_delay INTEGER DEFAULT 1000,
+    max_retry_delay INTEGER DEFAULT 43200000,
+    backoff_base INTEGER DEFAULT 1000,
     enqueued_at BIGINT NOT NULL DEFAULT extract(epoch from now()) * 1000,
     scheduled_at BIGINT NOT NULL DEFAULT extract(epoch from now()) * 1000,
     attempts INTEGER NOT NULL DEFAULT 0,
@@ -303,9 +380,9 @@ def upgrade() -> None:
     sa.Column('status', sa.VARCHAR(length=30), autoincrement=False, nullable=False),
     sa.Column('max_age', sa.BIGINT(), autoincrement=False, nullable=True),
     sa.Column('max_retry_count', sa.INTEGER(), autoincrement=False, nullable=True),
-    sa.Column('min_retry_delay', sa.INTEGER(), autoincrement=False, nullable=False),
-    sa.Column('max_retry_delay', sa.INTEGER(), autoincrement=False, nullable=False),
-    sa.Column('backoff_base', sa.INTEGER(), autoincrement=False, nullable=False),
+    sa.Column('min_retry_delay', sa.INTEGER(), autoincrement=False, nullable=True),
+    sa.Column('max_retry_delay', sa.INTEGER(), autoincrement=False, nullable=True),
+    sa.Column('backoff_base', sa.INTEGER(), autoincrement=False, nullable=True),
     sa.Column('enqueued_at', sa.BIGINT(), autoincrement=False, nullable=False),
     sa.Column('scheduled_at', sa.BIGINT(), autoincrement=False, nullable=False),
     sa.Column('attempts', sa.INTEGER(), autoincrement=False, nullable=False),

@@ -12,9 +12,9 @@ class BaseJob:
     status: Literal['queued', 'claimed', 'success', 'failed', 'expired', 'exhausted', 'cancelled'] | None
     max_age: int | None
     max_retry_count: int | None
-    min_retry_delay: int
-    max_retry_delay: int
-    backoff_base: int
+    min_retry_delay: int | None
+    max_retry_delay: int | None
+    backoff_base: int | None
     enqueued_at: datetime
     scheduled_at: datetime
     attempts: int
