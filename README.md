@@ -240,7 +240,8 @@ job.reschedule()
 
 In case your worker can't process the job for some reason, you can reject it,
 allowing it to be immediately claimed by another worker. This method should
-only be called inside the dequeue() context manager.
+only be called inside the `dequeue()` context manager or `subscribe()`
+generator.
 
 The processing attempt won't count towards the maximum number of retries.
 Overall it will look like the job wasn't even attempted and the corresponding
