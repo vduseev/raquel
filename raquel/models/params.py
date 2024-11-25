@@ -16,7 +16,7 @@ class EnqueueParams:
 
 @dataclass
 class ClaimParams:
-    queue: str
+    queues: list[str]
     now_ms: int
     before_ms: int
     claim_as: str

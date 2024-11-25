@@ -151,29 +151,29 @@ class Job(BaseJob):
         timestamp remains the same.
 
         **Warning:** This method **should only be called** inside the
-        ``dequeue()`` context manager.
+        ``dequeue()`` or ``subscribe()`` context manager.
         """
         self._rejected = True
 
-    def fail(self, exception: str | BaseException | None = None) -> None:
+    def fail(self, exception: str | Exception | None = None) -> None:
         """Fail the job.
 
         The job is marked as failed and the error message and stack trace
         are derived from the exception.
 
         **Warning:** This method **should only be called** inside the
-        ``dequeue()`` context manager.
+        ``dequeue()`` or ``subscribe()`` context manager.
 
         Args:
-            exception (str | BaseException | None): The exception that caused
+            exception (str | Exception | None): The exception that caused
                 the job to fail. If a string is provided, it is used as the
-                error message. If a BaseException is provided, its string
+                error message. If a Exception is provided, its string
                 representation is used as the error message and stack trace.
         """
         self._failed = True
         if exception:
             self.error = str(exception)
-            if isinstance(exception, BaseException):
+            if isinstance(exception, Exception):
                 stack_trace = "".join(traceback.format_exception(exception))
                 self.error_trace = stack_trace
 
@@ -197,7 +197,7 @@ class Job(BaseJob):
         reprocessing, use the ``reject()`` method instead.
 
         **Warning:** This method **should only be called** inside the
-        ``dequeue()`` context manager.
+        ``dequeue()`` or ``subscribe()`` context manager.
 
         Args:
             delay (timedelta | int | None): Reprocess the job after the given
