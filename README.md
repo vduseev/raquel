@@ -168,7 +168,7 @@ the current time when the job is enqueued. You can set the `scheduled_at` field
 to a future time to schedule the job to run at that time.
 
 ```python
-rq.enqueue(10_000, queue="my-jobs", at=datetime.now() + timedelta(hours=10))
+rq.enqueue("my-jobs", 10_000, at=datetime.now() + timedelta(hours=10))
 ```
 
 Fancy SQL? You can schedule jobs by directly inserting them into the table.
