@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
@@ -153,10 +154,61 @@ class AsyncRaquel(BaseRaquel):
             job = Job.from_raw_job(raw_job)
             return job
 
+    async def subscribe(
+        self,
+        *queues,
+        claim_as: str | None = None,
+        expire: bool = True,
+        sleep: int = 1000,
+    ) -> AsyncGenerator[Job, Any]:
+        """Subscribe to one or more queues and process jobs as they arrive.
+        
+        This method is a blocking generator that processes jobs as they arrive.
+        It is similar to the ``dequeue()`` method, but implements a continuous
+        loop to process jobs as they arrive.
+
+        Unless you explicitly close the generator using `break` or `close()`
+        method, it will keep running indefinitely.
+
+        Examples:
+
+            Subscribe to the "default" queue
+            >>> async for job in rq.subscribe():
+            ...     await process_job(job)
+
+            Subscribe to the "default" and "high-priority" queues
+            >>> async for job in rq.subscribe("default", "high-priority"):
+            ...     await process_job(job)
+
+            Use ``break`` to stop iterating
+            >>> async for job in rq.subscribe():
+            ...     await process_job(job)
+            ...     break  # Stop after processing the first job
+
+        Args:
+            queues (str): One or more queue names.
+            claim_as (str | None): Optional parameter to identify whoever
+                is locking the job. Defaults to None.
+            expire (bool): Cancel expired jobs by running an
+                ``UPDATE`` query in a separate transaction before claiming
+                a new job. Defaults to True.
+            sleep (int): Time to sleep between iterations in milliseconds.
+                Defaults to 1000 ms.
+        """
+        while True:
+            async with self.dequeue(*queues, claim_as=claim_as, expire=expire) as job:
+                try:
+                    if job:
+                        yield job
+                    else:
+                        await asyncio.sleep(sleep / 1000)
+                except GeneratorExit:
+                    return
+
     @asynccontextmanager
     async def dequeue(
         self,
-        queue: str | None = None,
+        *queues: str,
         before: datetime | int | None = None,
         claim_as: str | None = None,
         expire: bool = True,
@@ -186,7 +238,7 @@ class AsyncRaquel(BaseRaquel):
             ...     asyncio.sleep(1)
 
         Args:
-            queue (str | None): Name of the queue. Defaults to any queue.
+            queues (str): One or more queue names.
             before (datetime | int | None): Look for jobs scheduled at or
                 before this timestamp. Defaults to now (UTC).
             claim_as (str | None): Optional parameter to identify whoever
@@ -200,10 +252,10 @@ class AsyncRaquel(BaseRaquel):
         """
         # Cancel any expired jobs before attempting to acquire a new job
         if expire:
-            await self.expire(queue)
+            await self.expire(*queues)
 
         # Acquire the job
-        job = await self.claim(queue, before, claim_as)
+        job = await self.claim(*queues, before=before, claim_as=claim_as)
         if not job:
             yield None
             return
@@ -219,16 +271,16 @@ class AsyncRaquel(BaseRaquel):
 
             # Increment the number of attempts
             attempt_num = job.attempts + 1
-            exception: BaseException | None = None
+            exception: Exception | None = None
             try:
                 # Yield the job to the caller. At this point, the job is
                 # being processed by the caller code.
                 yield job
                 logger.debug(f"Job {job.id} processed successfully (attempt {attempt_num})")
 
-            except BaseException as be:
-                exception = be
-                logger.error(f"Failed to process job {job.id} (attempt {attempt_num}): {be}", exc_info=be)
+            except Exception as pe:
+                exception = pe
+                logger.error(f"Failed to process job {job.id} (attempt {attempt_num}): {pe}", exc_info=pe)
 
             finally:
                 finished_at = datetime.now(timezone.utc)
@@ -274,7 +326,7 @@ class AsyncRaquel(BaseRaquel):
     
     async def claim(
         self,
-        queue: str | None = None,
+        *queues: str,
         before: datetime | int | None = None,
         claim_as: str | None = None,
     ) -> Job | None:
@@ -290,7 +342,7 @@ class AsyncRaquel(BaseRaquel):
             >>> job = raquel.claim("default", before=before, claim_as="worker-1")
 
         Args:
-            queue (str | None): Name of the queue. Defaults to any queue.
+            queues (str): One or more queue names.
             before (datetime | int | None): Look for jobs scheduled at or before
                 this time. Defaults to now (UTC).
             claim_as (str):  Optional parameter to identify whoever
@@ -299,7 +351,7 @@ class AsyncRaquel(BaseRaquel):
         Returns:
             (Job | None): The acquired job or None if no job is available.
         """
-        p = common.parse_claim_params(queue, before, claim_as)
+        p = common.parse_claim_params(*queues, before=before, claim_as=claim_as)
         async with self.async_session() as session:
             # Retrieve the earliest scheduled job in the queue and lock the row.
             where_clause = (
@@ -307,8 +359,8 @@ class AsyncRaquel(BaseRaquel):
                 RawJob.scheduled_at <= p.before_ms,
                 RawJob.max_age.is_(None) | (RawJob.enqueued_at + RawJob.max_age >= p.now_ms),
             )
-            if queue:
-                where_clause = (RawJob.queue == queue,) + where_clause
+            if p.queues:
+                where_clause = (RawJob.queue.in_(p.queues),) + where_clause
 
             select_oldest_stmt = (
                 select(RawJob)
@@ -320,7 +372,7 @@ class AsyncRaquel(BaseRaquel):
             select_oldest_result = await session.execute(select_oldest_stmt)
             raw_job = select_oldest_result.scalars().first()
             if not raw_job:
-                logger.debug(f"No job available in queue {queue}")
+                logger.debug(f"No job available in queue {queues}")
                 return None
             
             # Lock the job
@@ -341,7 +393,7 @@ class AsyncRaquel(BaseRaquel):
             job.claimed_at = datetime.fromtimestamp(p.before_ms / 1000, timezone.utc)
             return job
 
-    async def expire(self, queue: str | None = None) -> int:
+    async def expire(self, *queues: str) -> int:
         """Cancel all expired jobs in the queue.
 
         Args:
@@ -350,15 +402,17 @@ class AsyncRaquel(BaseRaquel):
         Returns:
             int: Number of jobs cancelled.
         """
-        common.validate_queue_name(queue)
+        for queue in queues:
+            common.validate_queue_name(queue)
+
         async with self.async_session() as session:
             where_clause = (
                 RawJob.status.in_([self.QUEUED, self.FAILED]),
                 RawJob.max_age.is_not(None),
                 RawJob.enqueued_at + RawJob.max_age <= int(datetime.now(timezone.utc).timestamp() * 1000),
             )
-            if queue:
-                where_clause = (RawJob.queue == queue,) + where_clause
+            if queues:
+                where_clause = (RawJob.queue.in_(queues),) + where_clause
 
             stmt = (
                 update(RawJob)
@@ -467,7 +521,7 @@ class AsyncRaquel(BaseRaquel):
         self,
         job: Job,
         attempt_num: int = 1,
-        exception: BaseException | None = None,
+        exception: Exception | None = None,
         finished_at: datetime | None = None,
     ) -> bool:
         """Mark the job as failed and reschedule it for another attempt.

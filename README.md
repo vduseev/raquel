@@ -34,8 +34,11 @@ or simply a string.
 ```python
 from raquel import Raquel
 
+# Raquel uses SQLAlchemy to connect to most SQL databases
 rq = Raquel("postgresql+psycopg2://postgres:postgres@localhost/postgres")
-rq.enqueue(queue"default", payload="Hello, World!")
+# Enqueing a job is as simple as this
+rq.enqueue(queue="messages", payload="Hello, World!")
+rq.enqueue(queue="tasks", payload={"data": [1, 2]})
 ```
 
 On the worker side, pick jobs from the queue and process them:
@@ -46,17 +49,34 @@ from raquel import Raquel
 
 rq = Raquel("postgresql+psycopg2://postgres:postgres@localhost/postgres")
 
+# This loop will run forever, picking up jobs from the "messages" and  "tasks"
+# queues as their scheduled time comes.
+for job in rq.subscribe("messages", "tasks"):
+    do_work(job.payload)
+```
+
+Or, if you prefer, you can use a more hands-on approach, by manually dequeuing
+jobs. In fact, this is exactly what the `subscribe()` method does under the
+hood.
+
+```python
 while True:
-    with rq.dequeue() as job:
-        if job is None:
+    # dequeue() is a context manager that yields a job object. It will
+    # handle the job status and exceptions for you.
+    with rq.dequeue("tasks") as job:
+        if not job:
             time.sleep(1)
             continue
         do_work(job.payload)
 ```
 
-### Async example
+### How about async?
 
-Client side:
+Everything in Raquel is designed to work with both sync and async code.
+You can use the `AsyncRaquel` class to enqueue and dequeue jobs in an async
+manner.
+
+Client:
 
 ```python
 import asyncio
@@ -70,7 +90,7 @@ async def main():
 asyncio.run(main())
 ```
 
-Worker side:
+Worker:
 
 ```python
 import asyncio
@@ -79,19 +99,17 @@ from raquel import AsyncRaquel
 rq = AsyncRaquel("postgresql+asyncpg://postgres:postgres@localhost/postgres")
 
 async def main():
-    while True:
-        async with rq.dequeue() as job:
-            if job is None:
-                await asyncio.sleep(1)
-                continue
-            await do_work(job.payload)
+    async for job in rq.subscribe():
+        await do_work(job.payload)
 
 asyncio.run(main())
 ```
 
 ## The `jobs` table
 
-Raquel only needs **a single table** to work. Can you believe it?
+Raquel uses **a single database table** called `jobs`.
+This is all it needs. Can you believe it?
+
 Here is what this table consists of:
 
 | Column | Type | Description | Default | Nullable |
@@ -143,7 +161,7 @@ In extremely simple databases, such as SQLite, the fact that the whole
 database is locked during a write operation guarantees that no other worker
 will be able to set the job status to `claimed` at the same time.
 
-## Job scheduling
+## Enqueue a job
 
 All jobs are scheduled to run at a specific time. By default, this time is set to
 the current time when the job is enqueued. You can set the `scheduled_at` field
@@ -165,25 +183,23 @@ VALUES
     (uuid_generate_v4(), 'my-jobs', 'queued', 'Is this the real life?');
 ```
 
-### Rescheduling a Job
+## Reschedule a job
 
 The `reschedule()` method is used to reprocess the job at a later time.
 The job will remain in the queue with a new scheduled execution time, and the
 current attempt won't count towards the maximum number of retries.
-This method should only be called inside the `dequeue()` context manager.
+This method should only be called inside the `dequeue()` or `subscribe()`
+context managers.
 
 ```python
-with rq.dequeue("my-queue") as job:
-    if not job:
-        return
-
+for job in rq.subscribe("my-queue"):
     # Check if we have everything ready to process the job, and if not,
     # reschedule the job to run 10 minutes from now
     if not is_everything_ready_to_process(job.payload):
         job.reschedule(delay=timedelta(minutes=10))
-
-    # Otherwise, process the job
-    do_work(job.payload)
+    else:
+        # Otherwise, process the job
+        do_work(job.payload)
 ```
 
 The only things that change in the `jobs` table are the `scheduled_at` field,
@@ -201,7 +217,10 @@ Other ways to reschedule a job using the same `reschedule()` method:
 ```python
 # Run when the next day starts
 job.reschedule(
-    at=datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1))
+    at=datetime.now().replace(
+        hour=0, minute=0, second=0, microsecond=0,
+    ) + timedelta(days=1)
+)
 
 # Same but using the `delay` parameter
 job.reschedule(
@@ -217,7 +236,7 @@ job.reschedule(delay=500)
 job.reschedule()
 ```
 
-### Rejecting the Job
+## Reject the job
 
 In case your worker can't process the job for some reason, you can reject it,
 allowing it to be immediately claimed by another worker. This method should
@@ -228,15 +247,12 @@ Overall it will look like the job wasn't even attempted and the corresponding
 record in the `jobs` table will remain completely unchanged.
 
 ```python
-with rq.dequeue("my-queue") as job:
-    if job:
-        return
-
+for job in rq.subscribe("my-queue"):
     # Maybe this worker doesn't have the necessary permissions to process
     # this job.
     if job.payload.get("requires_admin"):
         job.reject()
-        return
+        continue
 
     # Otherwise, process the job
     do_work(job.payload)
@@ -260,35 +276,43 @@ rq.enqueue("my-queue", "Hello, World!")
 
 When jobs are dequeued by a worker, they are dequeued from whatever queue,
 whichever job is scheduled to run first. If you want to dequeue jobs from
-a specific queue, you can specify the queue name in the `dequeue()` context
-manager:
+specific queues, you can specify the queue name in the `subscribe()` method:
 
 ```python
-while True:
-    with rq.dequeue("my-queue") as job:
-        if job:
-            do_work(job.payload)
-        time.sleep(1)
+for job in rq.subscribe("my-queue", "another-queue", "as-many-as-you-want"):
+    do_work(job.payload)
 ```
 
 ## Job retries
 
-Jobs are retried when they fail. When n exception is caught by the `dequeue()`
+Jobs are retried when they fail. When an exception is caught by the `dequeue()`
 context manager, the job is rescheduled with an exponential backoff delay.
+
+Same works with `subscribe()` method, which is just a wrapper around `dequeue()`.
 
 By default, the job will be retried indefinitely. You can set the `max_retry_count`
 or `max_age` fields to limit the number of retries or the maximum age of the job.
 
 ```python
-while True:
-    with rq.dequeue() as job:
-        if job:
-            do_work(job.payload)
-            raise Exception("Oh no")
-        time.sleep(1)
+for job in rq.subscribe():
+    # Catch an exception manually
+    try:
+        do_work(job.payload)
+    except Exception as e:
+        # If you mark the job as failed, it will be retried.
+        job.fail(str(e))
+
+    # Or, you can just let the context manager handle the exception for you.
+    # The exception will be caught and the job will be retried.
+    # Under the hood, context manager will call `job.fail()` for you.
+    raise Exception("Oh no")
 ```
 
-The next retry is calculated as follows:
+Whenever job fails, the error and the traceback are stored in the `error` and
+`error_trace` columns. The job status is set to `failed` and the job will
+be retried.
+
+The next retry time is calculated as follows:
 
 * Take the current `scheduled_at` time.
 * Add the time it took to process the job (aka duration).
@@ -300,30 +324,34 @@ Now, the retry delay is calculated as:
 backoff_base * 2 ^ attempt
 ```
 
-That's the *planned* retry delay. The *actual* retry delay is capped by the
-`min_retry_delay` and `max_retry_delay` fields. The `min_retry_delay` defaults
+Whic is a *planned* retry delay. The *actual* retry delay is capped between the
+`min_retry_delay` and `max_retry_delay`. The `min_retry_delay` defaults
 to 1 second and the `max_retry_delay` defaults to 12 hours. The `backoff_base`
-defaults to 1 seconds as well.
+defaults to 1 second.
 
 In other words, here is how your job will be retried (assuming there is
 always a worker available and the job takes almost no time to process):
 
-* *First retry:* in 1 second
-* *Second retry:* after 2 seconds following the first retry
-* *Third retry:* after 4 seconds
-* ...
-* *7'th retry:* after ~2 minutes
-* ...
-* *11'th retry:* after ~30 minutes
-* ...
-* *15'th retry:* after about 9 hours
-* ... and so on with the maximum delay of 12 hours, or whatever you set
-  for this job using `max_retry_delay` setting.
+| Retry   | delay |
+|---------|-------------|
+| 1       | 1 second after 1'st attempt |
+| 2       | 2 seconds after 2'nd attempt |
+| 3       | after 4 seconds |
+| ...     | ... |
+| 6       | after ~2 minutes |
+| ...     | ... |
+| 10      | after ~30 minutes |
+| ...     | ... |
+| 14      | after ~9 hours |
+| ...     | ... |
 
-In some tasks it makes sense to chill out a bit before retrying. For example,
-Firebase API's might have a rate limit or it could be that some data isn't
-ready yet. In such cases, you can set the `min_retry_delay` to a higher value,
-such as 10 or 30 seconds.
+and so on with the maximum delay of 12 hours, or based on the maximum value
+you set for this job using the `max_retry_delay` setting.
+
+For certain types of jobs, it makes sense to chill out for a bit before
+retrying. For example, an API might have a rate limit you've just hit or
+some data might not be ready yet. In such cases, you can set the
+`min_retry_delay` to a higher value, such as 10 or 30 seconds.
 
 ℹ️ Remeber, that all durations and timestampts are in milliseconds. So 10 seconds
 is `10 * 1000 = 10000` milliseconds. 1 minute is `60 * 1000 = 60000` milliseconds.

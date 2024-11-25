@@ -110,11 +110,12 @@ def parse_enqueue_params(
 
 
 def parse_claim_params(
-    queue: str,
+    *queues: str,
     before: datetime | int | None = None,
     claim_as: str | None = None,
 ) -> ClaimParams:
-    validate_queue_name(queue)
+    for queue in queues:
+        validate_queue_name(queue)
     validate_claim_as(claim_as)
 
     now = int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -124,7 +125,7 @@ def parse_claim_params(
         before = int(before.timestamp() * 1000)
 
     return ClaimParams(
-        queue=queue,
+        queues=list(queues) if queues else [],
         now_ms=now,
         before_ms=before,
         claim_as=claim_as,

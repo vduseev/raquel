@@ -1,4 +1,5 @@
 import logging
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from uuid import UUID
@@ -149,10 +150,61 @@ class Raquel(BaseRaquel):
             job = Job.from_raw_job(raw_job)
             return job
 
+    def subscribe(
+        self,
+        *queues,
+        claim_as: str | None = None,
+        expire: bool = True,
+        sleep: int = 1000,
+    ) -> Generator[Job, Any, Any]:
+        """Subscribe to one or more queues and process jobs as they arrive.
+        
+        This method is a blocking generator that processes jobs as they appear.
+        It is similar to the ``dequeue()`` method, but implements a continuous
+        loop to process jobs as they arrive.
+
+        Unless you explicitly close the generator using `break` or `close()`
+        method, it will keep running indefinitely.
+
+        Examples:
+
+            Subscribe to the "default" queue
+            >>> for job in rq.subscribe():
+            ...     process_job(job)
+
+            Subscribe to the "default" and "high-priority" queues
+            >>> for job in rq.subscribe("default", "high-priority"):
+            ...     process_job(job)
+
+            Use ``break`` to stop iterating
+            >>> for job in rq.subscribe():
+            ...     process_job(job)
+            ...     break  # Stop after processing the first job
+
+        Args:
+            queues (str): One or more queue names.
+            claim_as (str | None): Optional parameter to identify whoever
+                is locking the job. Defaults to None.
+            expire (bool): Cancel expired jobs by running an
+                ``UPDATE`` query in a separate transaction before claiming
+                a new job. Defaults to True.
+            sleep (int): Time to sleep between iterations in milliseconds.
+                Defaults to 1000 ms.
+        """
+        while True:
+            with self.dequeue(*queues, claim_as=claim_as, expire=expire) as job:
+                try:
+                    if job:
+                        yield job
+                    else:
+                        time.sleep(sleep / 1000)
+                except GeneratorExit:
+                    return
+
     @contextmanager
     def dequeue(
         self,
-        queue: str | None = None,
+        *queues: str,
         before: datetime | int | None = None,
         claim_as: str | None = None,
         expire: bool = True,
@@ -182,7 +234,7 @@ class Raquel(BaseRaquel):
             ...     time.sleep(1)
 
         Args:
-            queue (str | None): Name of the queue. Defaults to any queue.
+            queues (str): One or more queue names.
             before (datetime | int | None): Look for jobs scheduled at or
                 before this timestamp. Defaults to now (UTC).
             claim_as (str | None): Optional parameter to identify whoever
@@ -196,10 +248,10 @@ class Raquel(BaseRaquel):
         """
         # Cancel any expired jobs before attempting to acquire a new job
         if expire:
-            self.expire(queue)
+            self.expire(*queues)
 
         # Acquire the job
-        job = self.claim(queue, before, claim_as)
+        job = self.claim(*queues, before=before, claim_as=claim_as)
         if not job:
             yield None
             return
@@ -215,16 +267,16 @@ class Raquel(BaseRaquel):
 
             # Increment the number of attempts
             attempt_num = job.attempts + 1
-            exception: BaseException | None = None
+            exception: Exception | None = None
             try:
                 # Yield the job to the caller. At this point, the job is
                 # being processed by the caller code.
                 yield job
                 logger.debug(f"Job {job.id} processed successfully (attempt {attempt_num})")
 
-            except BaseException as be:
-                exception = be
-                logger.error(f"Failed to process job {job.id} (attempt {attempt_num}): {be}", exc_info=be)
+            except Exception as pe:
+                exception = pe
+                logger.error(f"Failed to process job {job.id} (attempt {attempt_num}): {pe}", exc_info=pe)
 
             finally:
                 finished_at = datetime.now(timezone.utc)
@@ -270,7 +322,7 @@ class Raquel(BaseRaquel):
     
     def claim(
         self,
-        queue: str | None = None,
+        *queues: str,
         before: datetime | int | None = None,
         claim_as: str | None = None,
     ) -> Job | None:
@@ -286,7 +338,7 @@ class Raquel(BaseRaquel):
             >>> job = raquel.claim("default", before=before, claim_as="worker-1")
 
         Args:
-            queue (str | None): Name of the queue. Defaults to any queue.
+            queues (str): One or more queue names.
             before (datetime | int | None): Look for jobs scheduled at or before
                 this time. Defaults to now (UTC).
             claim_as (str):  Optional parameter to identify whoever
@@ -295,7 +347,7 @@ class Raquel(BaseRaquel):
         Returns:
             (Job | None): The acquired job or None if no job is available.
         """
-        p = common.parse_claim_params(queue, before, claim_as)
+        p = common.parse_claim_params(*queues, before=before, claim_as=claim_as)
         with Session(self.engine) as session:
             # Retrieve the earliest scheduled job in the queue and lock the row.
             where_clause = (
@@ -303,8 +355,8 @@ class Raquel(BaseRaquel):
                 RawJob.scheduled_at <= p.before_ms,
                 RawJob.max_age.is_(None) | (RawJob.enqueued_at + RawJob.max_age >= p.now_ms),
             )
-            if queue:
-                where_clause = (RawJob.queue == queue,) + where_clause
+            if p.queues:
+                where_clause = (RawJob.queue.in_(p.queues),) + where_clause
 
             select_oldest_stmt = (
                 select(RawJob)
@@ -315,7 +367,7 @@ class Raquel(BaseRaquel):
             )
             raw_job = session.execute(select_oldest_stmt).scalars().first()
             if not raw_job:
-                logger.debug(f"No job available in queue {queue}")
+                logger.debug(f"No job available in queue {p.queues}")
                 return None
             
             # Lock the job
@@ -336,24 +388,26 @@ class Raquel(BaseRaquel):
             job.claimed_at = datetime.fromtimestamp(p.before_ms / 1000, timezone.utc)
             return job
 
-    def expire(self, queue: str | None = None) -> int:
+    def expire(self, *queues: str) -> int:
         """Cancel all expired jobs in the queue.
 
         Args:
-            queue (str | None): Name of the queue. Defaults to all queues.
+            queues (str): One or more queue names.
 
         Returns:
             int: Number of jobs cancelled.
         """
-        common.validate_queue_name(queue)
+        for queue in queues:
+            common.validate_queue_name(queue)
+
         with Session(self.engine) as session:
             where_clause = (
                 RawJob.status.in_([self.QUEUED, self.FAILED]),
                 RawJob.max_age.is_not(None),
                 RawJob.enqueued_at + RawJob.max_age <= int(datetime.now(timezone.utc).timestamp() * 1000),
             )
-            if queue:
-                where_clause = (RawJob.queue == queue,) + where_clause
+            if queues:
+                where_clause = (RawJob.queue.in_(queues),) + where_clause
 
             stmt = (
                 update(RawJob)
@@ -461,7 +515,7 @@ class Raquel(BaseRaquel):
         self,
         job: Job,
         attempt_num: int = 1,
-        exception: str | BaseException | None = None,
+        exception: str | Exception | None = None,
         finished_at: datetime | None = None,
     ) -> bool:
         """Mark the job as failed and reschedule it for another attempt.
@@ -476,7 +530,7 @@ class Raquel(BaseRaquel):
             job (Job): The job that failed.
             attempt_num (int): Number of attempts it took to process this job.
                 Defaults to 1.
-            exception (str | BaseException | None): Error or exception.
+            exception (str | Exception | None): Error or exception.
             finished_at (datetime | None): Time when the job was finished.
                 Defaults to now (UTC).
         """
