@@ -359,6 +359,8 @@ is `10 * 1000 = 10000` milliseconds. 1 minute is `60 * 1000 = 60000` millisecond
 
 ## Prepare your database
 
+### Create the table by calling a function
+
 You can configure the table using the ``create_all()`` method, which will
 automatically use the supported syntax for the database you are using (it is
 safe to run it multiple times, it only creates the table once.).
@@ -367,6 +369,8 @@ safe to run it multiple times, it only creates the table once.).
 # Works for all databases
 rq.create_all()
 ```
+
+### Create the table using SQL
 
 Alternatively, you can create the table **manually**. For example, in **Postgres**:
 
@@ -396,44 +400,23 @@ CREATE INDEX IF NOT EXISTS idx_jobs_scheduled_at ON jobs (scheduled_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_claimed_by ON jobs (claimed_by);
 ```
 
-Or, when using **Alembic**, add this to your `upgrade()` and `downgrade()` functions in
-the appropriate migration file:
+### Create the table using Alembic
+
+Add this to your `env.py` file in Alembic directory:
 
 ```python
+from sqlmodel import SQLModel
+from raquel.models.raw_job import RawJob
+from raquel.models.base_sql import BaseSQL as RaquelBaseSQL
 
-def upgrade() -> None:
-    op.create_table('jobs',
-    sa.Column('id', sa.UUID(), autoincrement=False, nullable=False),
-    sa.Column('queue', sa.VARCHAR(length=255), autoincrement=False, nullable=False),
-    sa.Column('payload', sa.VARCHAR(), autoincrement=False, nullable=True),
-    sa.Column('status', sa.VARCHAR(length=30), autoincrement=False, nullable=False),
-    sa.Column('max_age', sa.BIGINT(), autoincrement=False, nullable=True),
-    sa.Column('max_retry_count', sa.INTEGER(), autoincrement=False, nullable=True),
-    sa.Column('min_retry_delay', sa.INTEGER(), autoincrement=False, nullable=True),
-    sa.Column('max_retry_delay', sa.INTEGER(), autoincrement=False, nullable=True),
-    sa.Column('backoff_base', sa.INTEGER(), autoincrement=False, nullable=True),
-    sa.Column('enqueued_at', sa.BIGINT(), autoincrement=False, nullable=False),
-    sa.Column('scheduled_at', sa.BIGINT(), autoincrement=False, nullable=False),
-    sa.Column('attempts', sa.INTEGER(), autoincrement=False, nullable=False),
-    sa.Column('error', sa.VARCHAR(), autoincrement=False, nullable=True),
-    sa.Column('error_trace', sa.VARCHAR(), autoincrement=False, nullable=True),
-    sa.Column('claimed_by', sa.VARCHAR(length=255), autoincrement=False, nullable=True),
-    sa.Column('claimed_at', sa.BIGINT(), autoincrement=False, nullable=True),
-    sa.Column('finished_at', sa.BIGINT(), autoincrement=False, nullable=True),
-    sa.PrimaryKeyConstraint('id', name='jobs_pkey')
-    )
-    op.create_index('ix_jobs_status', 'jobs', ['status'], unique=False)
-    op.create_index('ix_jobs_scheduled_at', 'jobs', ['scheduled_at'], unique=False)
-    op.create_index('ix_jobs_queue', 'jobs', ['queue'], unique=False)
-    op.create_index('ix_jobs_claimed_by', 'jobs', ['claimed_by'], unique=False)
-
-def downgrade() -> None:
-    op.drop_index('ix_jobs_claimed_by', table_name='jobs')
-    op.drop_index('ix_jobs_queue', table_name='jobs')
-    op.drop_index('ix_jobs_scheduled_at', table_name='jobs')
-    op.drop_index('ix_jobs_status', table_name='jobs')
-    op.drop_table('jobs')
+raquel_metadata = RaquelBaseSQL.metadata
+target_metadata = SQLModel.metadata
+for table in raquel_metadata.tables.values():
+    table.to_metadata(target_metadata)
 ```
+
+Once you do that, Alembic will automatically add the Jobs table and the appropriate
+indexes to your migration file.
 
 ## Fun facts
 
