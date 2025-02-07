@@ -10,7 +10,9 @@ from .base_sql import BaseSQL
 
 
 def now_ms() -> int:
-    return int(datetime.now(timezone.utc).timestamp() * 1000)  # pragma: no cover
+    return int(
+        datetime.now(timezone.utc).timestamp() * 1000
+    )  # pragma: no cover
 
 
 class RawJob(BaseSQL):
@@ -19,20 +21,40 @@ class RawJob(BaseSQL):
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     queue: Mapped[str] = mapped_column(String, nullable=False, index=True)
     payload: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    status: Mapped[str] = mapped_column(String(30), nullable=False, default='queued', index=True)
+    status: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="queued", index=True
+    )
     max_age: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
-    max_retry_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    min_retry_delay: Mapped[int] = mapped_column(Integer, nullable=True, default=1000)
-    max_retry_delay: Mapped[int] = mapped_column(Integer, nullable=True, default=12 * 3600 * 1000)
-    backoff_base: Mapped[int] = mapped_column(Integer, nullable=True, default=1000)
-    enqueued_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ms)
-    scheduled_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=now_ms, index=True)
+    max_retry_count: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    min_retry_delay: Mapped[int] = mapped_column(
+        Integer, nullable=True, default=1000
+    )
+    max_retry_delay: Mapped[int] = mapped_column(
+        Integer, nullable=True, default=12 * 3600 * 1000
+    )
+    backoff_base: Mapped[int] = mapped_column(
+        Integer, nullable=True, default=1000
+    )
+    enqueued_at: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=now_ms
+    )
+    scheduled_at: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=now_ms, index=True
+    )
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     error_trace: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    claimed_by: Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
-    claimed_at: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
-    finished_at: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    claimed_by: Mapped[Optional[str]] = mapped_column(
+        String, nullable=True, index=True
+    )
+    claimed_at: Mapped[Optional[int]] = mapped_column(
+        BigInteger, nullable=True
+    )
+    finished_at: Mapped[Optional[int]] = mapped_column(
+        BigInteger, nullable=True
+    )
 
     @staticmethod
     def from_enqueue_params(enqueue_params: EnqueueParams) -> "RawJob":

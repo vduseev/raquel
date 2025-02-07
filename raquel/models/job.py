@@ -4,9 +4,9 @@ import traceback
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4, UUID
-from typing import Any, Literal
+from typing import Any
 
-from .base_job import BaseJob
+from .base_job import BaseJob, JobStatusValueType
 from .raw_job import RawJob
 
 
@@ -26,11 +26,11 @@ class Job(BaseJob):
     a single collision is 1 in a billion.
     
     This is generated automatically on the client side."""
-    queue: str = field(default='default')
+    queue: str = field(default="default")
     """The name of the queue that the job belongs to."""
     payload: Any | None = field(default=None)
     """The payload of the job."""
-    status: Literal['queued', 'claimed', 'success', 'failed', 'expired', 'exhausted', 'cancelled'] | None = field(default=None)
+    status: JobStatusValueType | None = field(default=None)
     """The status of the job.
     
     When jobs are placed in the database, they are initially in the "queued"
@@ -72,13 +72,17 @@ class Job(BaseJob):
     The delay between retries is calculated as ``base * 2 ** retry`` in milliseconds.
     Then it is clamped between ``min_retry_delay`` and ``max_retry_delay``.
     """
-    enqueued_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    enqueued_at: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
     """The time when the job was enqueued.
     
     Represented as a datetime object in UTC. In database, this is stored as
     a Unix epoch timestamp in milliseconds in UTC timezone.
     """
-    scheduled_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    scheduled_at: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
     """The time when the job is scheduled for processing.
 
     The job will not be processed before this time.
@@ -117,10 +121,22 @@ class Job(BaseJob):
         payload = Job.deserialize_payload(raw_job.payload)
 
         # Convert epoch timestamps in milliseconds to datetime objects
-        enqueued_at_ts = datetime.fromtimestamp(raw_job.enqueued_at / 1000, timezone.utc)
-        scheduled_at_ts = datetime.fromtimestamp(raw_job.scheduled_at / 1000, timezone.utc)
-        claimed_at_t = datetime.fromtimestamp(raw_job.claimed_at / 1000, timezone.utc) if raw_job.claimed_at else None
-        finished_at_ts = datetime.fromtimestamp(raw_job.finished_at / 1000, timezone.utc) if raw_job.finished_at else None
+        enqueued_at_ts = datetime.fromtimestamp(
+            raw_job.enqueued_at / 1000, timezone.utc
+        )
+        scheduled_at_ts = datetime.fromtimestamp(
+            raw_job.scheduled_at / 1000, timezone.utc
+        )
+        claimed_at_t = (
+            datetime.fromtimestamp(raw_job.claimed_at / 1000, timezone.utc)
+            if raw_job.claimed_at
+            else None
+        )
+        finished_at_ts = (
+            datetime.fromtimestamp(raw_job.finished_at / 1000, timezone.utc)
+            if raw_job.finished_at
+            else None
+        )
 
         job = Job(
             id=raw_job.id,
@@ -142,27 +158,28 @@ class Job(BaseJob):
         )
 
         return job
-    
+
     def reject(self) -> None:
         """Reject the job.
-        
-        The lock is removed from the rejected job, allowing it to be
-        **immediately** claimed by another worker. The ``scheduled_at``
-        timestamp remains the same.
 
-        **Warning:** This method **should only be called** inside the
-        ``dequeue()`` or ``subscribe()`` context manager.
+        The lock is removed from the rejected job, allowing it to be
+        claimed by another worker. The removal of lock is performed by the
+        ``dequeue()`` context manager, once the processing of the job is
+        complete. The ``scheduled_at`` timestamp remains the same.
+
+        Warning: This method should be called inside the
+        ``dequeue()`` or ``subscribe()`` context manager only.
         """
         self._rejected = True
 
     def fail(self, exception: str | Exception | None = None) -> None:
-        """Fail the job.
+        """Fail the job without raising an exception.
 
         The job is marked as failed and the error message and stack trace
         are derived from the exception.
 
-        **Warning:** This method **should only be called** inside the
-        ``dequeue()`` or ``subscribe()`` context manager.
+        Warning: This method should be called inside the
+        ``dequeue()`` or ``subscribe()`` context manager only.
 
         Args:
             exception (str | Exception | None): The exception that caused
@@ -183,7 +200,7 @@ class Job(BaseJob):
         at: datetime | int | None = None,
     ) -> None:
         """Reschedule the job.
-        
+
         Reprocess the job at a later time. The job will remain in the queue
         with a new scheduled execution time, and the current attempt won't
         count towards the maximum number of retries.
@@ -218,9 +235,13 @@ class Job(BaseJob):
         elif isinstance(at, datetime):
             self._rescheduled_at = at
         elif isinstance(at, int):
-            self._rescheduled_at = datetime.fromtimestamp(at / 1000, timezone.utc)
+            self._rescheduled_at = datetime.fromtimestamp(
+                at / 1000, timezone.utc
+            )
         else:
-            raise ValueError("Invalid value for 'at' argument. Expected datetime or int.")
+            raise ValueError(
+                "Invalid value for 'at' argument. Expected datetime or int."
+            )
 
         delay_ms = 0
         if at is None and delay is None:
@@ -230,8 +251,10 @@ class Job(BaseJob):
         elif isinstance(delay, datetime):
             delay_ms = int(delay.total_seconds() * 1000)
 
-        self._rescheduled_at = self._rescheduled_at + timedelta(milliseconds=delay_ms)
-    
+        self._rescheduled_at = self._rescheduled_at + timedelta(
+            milliseconds=delay_ms
+        )
+
     @staticmethod
     def deserialize_payload(serialized_payload: str | None) -> Any | None:
         if not serialized_payload:
@@ -240,5 +263,7 @@ class Job(BaseJob):
         try:
             return json.loads(serialized_payload)
         except json.JSONDecodeError:
-            logger.debug(f"Failed to deserialize payload using JSON: {serialized_payload}")
-            return serialized_payload 
+            logger.debug(
+                f"Failed to deserialize payload using JSON: {serialized_payload}"
+            )
+            return serialized_payload

@@ -15,7 +15,17 @@ class QueueStats:
 
     @staticmethod
     def from_row(row: tuple) -> "QueueStats":
-        name, total, queued, claimed, success, failed, expired, exhausted, cancelled = row
+        (
+            name,
+            total,
+            queued,
+            claimed,
+            success,
+            failed,
+            expired,
+            exhausted,
+            cancelled,
+        ) = row
         return QueueStats(
             name=name,
             total=total,

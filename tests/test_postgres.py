@@ -5,22 +5,21 @@ import time
 import pytest
 
 from raquel import Raquel, AsyncRaquel
-from .fixtures import normal, asynchronous
+from .fixtures import rq_psycopg2, rq_asyncpg
 
 
-def test_concurrent_job_dequeue_in_loop(normal: Raquel):
+def test_concurrent_job_dequeue_in_loop(rq_psycopg2: Raquel):
+    # Thread that will continuously enqueue jobs
     def enqueue_jobs(limit: int):
         for i in range(limit):
-            normal.enqueue("concurrent_loop", {"data": i})
-            print(f"Enqueued job {i}")
+            rq_psycopg2.enqueue("concurrent_loop", {"data": i})
             time.sleep(0.05)
 
+    # Thread that will simultaneously continuously dequeue jobs
     def dequeue_jobs(limit: int):
         for i in range(limit):
-            print(f"Dequeueing job {i}")
-            with normal.dequeue("concurrent_loop") as job:
-                print(f"Dequeued job {i}: {job}")
-                assert job.status == normal.CLAIMED
+            with rq_psycopg2.dequeue("concurrent_loop") as job:
+                assert job.status == rq_psycopg2.CLAIMED
                 assert job.payload == {"data": i}
             time.sleep(0.05)
 
@@ -30,32 +29,32 @@ def test_concurrent_job_dequeue_in_loop(normal: Raquel):
 
     # First, start the enqueue thread
     enqueue_thread.start()
+
     # Wait a bit
     time.sleep(0.1)
     dequeue_thread.start()
     enqueue_thread.join()
     dequeue_thread.join()
 
-    assert normal.count("concurrent_loop") == num_jobs
-    assert normal.count("concurrent_loop", normal.QUEUED) == 0
-    assert normal.count("concurrent_loop", normal.CLAIMED) == 0
-    assert normal.count("concurrent_loop", normal.SUCCESS) == num_jobs
+    assert rq_psycopg2.count("concurrent_loop") == num_jobs
+    assert rq_psycopg2.count("concurrent_loop", rq_psycopg2.QUEUED) == 0
+    assert rq_psycopg2.count("concurrent_loop", rq_psycopg2.CLAIMED) == 0
+    assert rq_psycopg2.count("concurrent_loop", rq_psycopg2.SUCCESS) == num_jobs
 
 
 @pytest.mark.asyncio
-async def test_concurrent_job_dequeue_in_loop_async(asynchronous: AsyncRaquel):
+async def test_concurrent_job_dequeue_in_loop_async(rq_asyncpg: AsyncRaquel):
+    # Task that will continuously enqueue jobs
     async def enqueue_jobs(limit: int):
         for i in range(limit):
-            await asynchronous.enqueue("concurrent_loop", {"data": i})
-            print(f"Enqueued job {i}")
+            await rq_asyncpg.enqueue("concurrent_loop", {"data": i})
             await asyncio.sleep(0.05)
 
+    # Task that will simultaneously continuously dequeue jobs
     async def dequeue_jobs(limit: int):
         for i in range(limit):
-            print(f"Dequeueing job {i}")
-            async with asynchronous.dequeue("concurrent_loop") as job:
-                print(f"Dequeued job {i}: {job}")
-                assert job.status == asynchronous.CLAIMED
+            async with rq_asyncpg.dequeue("concurrent_loop") as job:
+                assert job.status == rq_asyncpg.CLAIMED
                 assert job.payload == {"data": i}
             await asyncio.sleep(0.05)
 
@@ -65,28 +64,28 @@ async def test_concurrent_job_dequeue_in_loop_async(asynchronous: AsyncRaquel):
 
     await asyncio.gather(enqueue_task, dequeue_task)
 
-    assert await asynchronous.count("concurrent_loop") == num_jobs
-    assert await asynchronous.count("concurrent_loop", asynchronous.QUEUED) == 0
-    assert await asynchronous.count("concurrent_loop", asynchronous.CLAIMED) == 0
-    assert await asynchronous.count("concurrent_loop", asynchronous.SUCCESS) == num_jobs
+    assert await rq_asyncpg.count("concurrent_loop") == num_jobs
+    assert await rq_asyncpg.count("concurrent_loop", rq_asyncpg.QUEUED) == 0
+    assert await rq_asyncpg.count("concurrent_loop", rq_asyncpg.CLAIMED) == 0
+    assert await rq_asyncpg.count("concurrent_loop", rq_asyncpg.SUCCESS) == num_jobs
 
 
-def test_continuous_dequeue_for_1_sec(normal: Raquel):
+def test_continuous_dequeue_for_1_sec(rq_psycopg2: Raquel):
     def enqueue_jobs(limit: int):
         for i in range(limit):
-            normal.enqueue("continuous_1_sec", {"data": i})
-            print(f"Enqueued job {i}")
+            rq_psycopg2.enqueue("continuous_1_sec", {"data": i})
             time.sleep(0.05)
 
     def dequeue_jobs(limit: int):
         start_time = time.time()
         job_counter = 0
+        # We are prepared to dequeue for 10 seconds but we will stop
+        # if we reach the correct number of jobs.
         while time.time() - start_time < 10 and job_counter < limit:
-            with normal.dequeue("continuous_1_sec") as job:
+            with rq_psycopg2.dequeue("continuous_1_sec") as job:
                 if job is None:
                     continue
-                print(f"Dequeued job: {job}")
-                assert job.status == normal.CLAIMED
+                assert job.status == rq_psycopg2.CLAIMED
                 assert job.payload == {"data": job_counter}
             job_counter += 1
             time.sleep(0.1)
@@ -105,29 +104,29 @@ def test_continuous_dequeue_for_1_sec(normal: Raquel):
     enqueue_thread.join()
     dequeue_thread.join()
 
-    assert normal.count("continuous_1_sec") == num_jobs
-    assert normal.count("continuous_1_sec", normal.QUEUED) == 0
-    assert normal.count("continuous_1_sec", normal.CLAIMED) == 0
-    assert normal.count("continuous_1_sec", normal.SUCCESS) == num_jobs
+    assert rq_psycopg2.count("continuous_1_sec") == num_jobs
+    assert rq_psycopg2.count("continuous_1_sec", rq_psycopg2.QUEUED) == 0
+    assert rq_psycopg2.count("continuous_1_sec", rq_psycopg2.CLAIMED) == 0
+    assert rq_psycopg2.count("continuous_1_sec", rq_psycopg2.SUCCESS) == num_jobs
 
 
 @pytest.mark.asyncio
-async def test_continuous_dequeue_for_1_sec_async(asynchronous: AsyncRaquel):
+async def test_continuous_dequeue_for_1_sec_async(rq_asyncpg: AsyncRaquel):
     async def enqueue_jobs(limit: int):
         for i in range(limit):
-            await asynchronous.enqueue("continuous_1_sec", {"data": i})
-            print(f"Enqueued job {i}")
+            await rq_asyncpg.enqueue("continuous_1_sec", {"data": i})
             await asyncio.sleep(0.05)
 
     async def dequeue_jobs(limit: int):
         start_time = time.time()
         job_counter = 0
+        # We are prepared to dequeue for 10 seconds but we will stop
+        # if we reach the correct number of jobs.
         while time.time() - start_time < 10 and job_counter < limit:
-            async with asynchronous.dequeue("continuous_1_sec") as job:
+            async with rq_asyncpg.dequeue("continuous_1_sec") as job:
                 if job is None:
                     continue
-                print(f"Dequeued job: {job}")
-                assert job.status == asynchronous.CLAIMED
+                assert job.status == rq_asyncpg.CLAIMED
                 assert job.payload == {"data": job_counter}
             job_counter += 1
             await asyncio.sleep(0.1)
@@ -141,7 +140,7 @@ async def test_continuous_dequeue_for_1_sec_async(asynchronous: AsyncRaquel):
     
     await asyncio.gather(enqueue_task, dequeue_task)
 
-    assert await asynchronous.count("continuous_1_sec") == num_jobs
-    assert await asynchronous.count("continuous_1_sec", asynchronous.QUEUED) == 0
-    assert await asynchronous.count("continuous_1_sec", asynchronous.CLAIMED) == 0
-    assert await asynchronous.count("continuous_1_sec", asynchronous.SUCCESS) == num_jobs
+    assert await rq_asyncpg.count("continuous_1_sec") == num_jobs
+    assert await rq_asyncpg.count("continuous_1_sec", rq_asyncpg.QUEUED) == 0
+    assert await rq_asyncpg.count("continuous_1_sec", rq_asyncpg.CLAIMED) == 0
+    assert await rq_asyncpg.count("continuous_1_sec", rq_asyncpg.SUCCESS) == num_jobs

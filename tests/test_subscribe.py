@@ -1,22 +1,26 @@
-import asyncio
-import time
 from datetime import datetime, timezone
 
 import pytest
 
-from raquel import Raquel, AsyncRaquel
-from .fixtures import simple, asynchronous
+from raquel import Raquel, AsyncRaquel, StopSubscription, Job
+from .fixtures import rq_sqlite, rq_asyncpg
 
 
-def test_basic_subscribe(simple: Raquel):
-    simple.enqueue("default", {"foo": "bar"})
-    simple.enqueue("tasks", 1)
+def test_basic_subscribe(rq_sqlite: Raquel):
+    rq_sqlite.enqueue("default", {"foo": "bar"})
+    rq_sqlite.enqueue("tasks", 1)
 
-    for i, job in enumerate(simple.subscribe("default", "tasks")):
-        if i == 0:
+    count = 0
+
+    @rq_sqlite.subscribe("default", "tasks")
+    def worker(job: Job):
+        nonlocal count
+        count += 1
+
+        if count == 1:
             assert job.queue == "default"
             assert job.payload == {"foo": "bar"}
-            assert job.status == simple.CLAIMED
+            assert job.status == rq_sqlite.CLAIMED
             assert job.max_age == None
             assert job.max_retry_count == None
             assert job.enqueued_at <= datetime.now(timezone.utc)
@@ -24,26 +28,34 @@ def test_basic_subscribe(simple: Raquel):
             assert job.attempts == 0
             assert job.claimed_at <= datetime.now(timezone.utc)
             assert job.finished_at == None
-        elif i == 1:
+        elif count == 2:
             assert job.queue == "tasks"
             assert job.payload == 1
-            break
+            raise StopSubscription
+        
+    # Launch the subscriber. It will stop after 2 iterations
+    worker.run()
 
-    # Make sure the job is not in the queue
-    assert not simple.claim("default")
+    # Make sure the jobs are not in the queues anymore
+    assert not rq_sqlite.claim()
 
 
 @pytest.mark.asyncio
-async def test_basic_subscribe_async(asynchronous: AsyncRaquel):
-    await asynchronous.enqueue("default", {"foo": "bar"})
-    await asynchronous.enqueue("tasks", 1)
+async def test_basic_subscribe_async(rq_asyncpg: AsyncRaquel):
+    await rq_asyncpg.enqueue("default", {"foo": "bar"})
+    await rq_asyncpg.enqueue("tasks", 1)
 
-    i = 0
-    async for job in asynchronous.subscribe("default", "tasks"):
-        if i == 0:
+    count = 0
+
+    @rq_asyncpg.subscribe("default", "tasks")
+    async def worker(job: Job):
+        nonlocal count
+        count += 1
+
+        if count == 1:
             assert job.queue == "default"
             assert job.payload == {"foo": "bar"}
-            assert job.status == asynchronous.CLAIMED
+            assert job.status == rq_asyncpg.CLAIMED
             assert job.max_age == None
             assert job.max_retry_count == None
             assert job.enqueued_at <= datetime.now(timezone.utc)
@@ -51,158 +63,266 @@ async def test_basic_subscribe_async(asynchronous: AsyncRaquel):
             assert job.attempts == 0
             assert job.claimed_at <= datetime.now(timezone.utc)
             assert job.finished_at == None
-        elif i == 1:
+        elif count == 2:
             assert job.queue == "tasks"
             assert job.payload == 1
-            break
-        i += 1
+            raise StopSubscription
+        
+    await worker.run()
 
-    # Make sure the job is not in the queue
-    assert not await asynchronous.claim("default")
+    # Make sure the jobs are not in the queues anymore
+    assert not await rq_asyncpg.claim()
 
 
-def test_reject_subscribe(simple: Raquel):
-    # Perform ENQUEUE
-    enqueued_job = simple.enqueue("default", {"foo": "bar"})
+def test_reject_subscribe(rq_sqlite: Raquel):
+    enqueued_job = rq_sqlite.enqueue("default", {"foo": "bar"})
 
-    # Perform SUBSCRIBE
-    for job in simple.subscribe("default"):
+    @rq_sqlite.subscribe("default")
+    def worker(job: Job, stop: bool = False):
         assert job.queue == "default"
         assert job.payload == {"foo": "bar"}
-        assert job.status == simple.CLAIMED
+        assert job.status == rq_sqlite.CLAIMED
         assert job.attempts == 0
 
         job.reject()
-        break
+        if stop:
+            raise StopSubscription
+    
+    worker.run(stop=True)
 
-    assert simple.count("default") == 1
-    assert simple.count("default", simple.QUEUED) == 1
+    assert rq_sqlite.count("default") == 1
+    assert rq_sqlite.count("default", rq_sqlite.QUEUED) == 1
 
-    updated_job = simple.get(enqueued_job.id)
+    updated_job = rq_sqlite.get(enqueued_job.id)
     assert updated_job.attempts == 0
-    assert updated_job.status == simple.QUEUED
+    assert updated_job.status == rq_sqlite.QUEUED
     assert updated_job.claimed_at == None
 
 
 @pytest.mark.asyncio
-async def test_reject_subscribe_async(asynchronous: AsyncRaquel):
-    # Perform ENQUEUE
-    enqueued_job = await asynchronous.enqueue("default", {"foo": "bar"})
+async def test_reject_subscribe_async(rq_asyncpg: AsyncRaquel):
+    enqueued_job = await rq_asyncpg.enqueue("default", {"foo": "bar"})
 
-    # Perform SUBSCRIBE
-    async for job in asynchronous.subscribe("default"):
+    @rq_asyncpg.subscribe("default")
+    async def worker(job: Job, stop: bool = False):
         assert job.queue == "default"
         assert job.payload == {"foo": "bar"}
-        assert job.status == asynchronous.CLAIMED
+        assert job.status == rq_asyncpg.CLAIMED
         assert job.attempts == 0
 
         job.reject()
-        break
+        if stop:
+            raise StopSubscription
+        
+    await worker.run(stop=True)
 
-    assert await asynchronous.count("default") == 1
-    assert await asynchronous.count("default", asynchronous.QUEUED) == 1
+    assert await rq_asyncpg.count("default") == 1
+    assert await rq_asyncpg.count("default", rq_asyncpg.QUEUED) == 1
 
-    updated_job = await asynchronous.get(enqueued_job.id)
+    updated_job = await rq_asyncpg.get(enqueued_job.id)
     assert updated_job.attempts == 0
-    assert updated_job.status == asynchronous.QUEUED
+    assert updated_job.status == rq_asyncpg.QUEUED
     assert updated_job.claimed_at == None
 
 
-def test_fail_subscribe(simple: Raquel):
-    # Perform ENQUEUE
-    enqueued_job = simple.enqueue("default", {"foo": "bar"})
+def test_exception(rq_sqlite: Raquel):
+    enqueued_job = rq_sqlite.enqueue("default", {"foo": "bar"})
 
-    # Perform SUBSCRIBE
-    for job in simple.subscribe("default"):
+    @rq_sqlite.subscribe("default", raise_stop_on_unhandled_exc=True)
+    def worker(job: Job):
         assert job.queue == "default"
         assert job.payload == {"foo": "bar"}
-        assert job.status == simple.CLAIMED
+        assert job.status == rq_sqlite.CLAIMED
         assert job.attempts == 0
 
-        job.fail("Won't do")
-        break
+        raise ValueError("Won't do")
+    
+    worker.run()
 
-    assert simple.count("default") == 1
-    assert simple.count("default", simple.FAILED) == 1
+    assert rq_sqlite.count("default") == 1
+    assert rq_sqlite.count("default", rq_sqlite.FAILED) == 1
 
-    updated_job = simple.get(enqueued_job.id)
+    updated_job = rq_sqlite.get(enqueued_job.id)
     assert updated_job.attempts == 1
-    assert updated_job.status == simple.FAILED
+    assert updated_job.status == rq_sqlite.FAILED
     assert updated_job.error == "Won't do"
 
 
-def test_catch_exception_and_fail_subscribe(simple: Raquel):
-    # Perform ENQUEUE
-    enqueued_job = simple.enqueue("default", {"foo": "bar"})
+@pytest.mark.asyncio
+async def test_exception_async(rq_asyncpg: AsyncRaquel):
+    enqueued_job = await rq_asyncpg.enqueue("default", {"foo": "bar"})
 
-    # Perform SUBSCRIBE
-    for job in simple.subscribe("default"):
+    @rq_asyncpg.subscribe("default", raise_stop_on_unhandled_exc=True)
+    async def worker(job: Job):
         assert job.queue == "default"
         assert job.payload == {"foo": "bar"}
-        assert job.status == simple.CLAIMED
+        assert job.status == rq_asyncpg.CLAIMED
+        assert job.attempts == 0
+
+        raise ValueError("Won't do")
+    
+    await worker.run()
+    
+    assert await rq_asyncpg.count("default") == 1
+    assert await rq_asyncpg.count("default", rq_asyncpg.FAILED) == 1
+
+    updated_job = await rq_asyncpg.get(enqueued_job.id)
+    assert updated_job.attempts == 1
+    assert updated_job.status == rq_asyncpg.FAILED
+    assert updated_job.error == "Won't do"
+
+
+def test_manual_fail(rq_sqlite: Raquel):
+    enqueued_job = rq_sqlite.enqueue("default", {"foo": "bar"})
+
+    @rq_sqlite.subscribe("default")
+    def worker(job: Job):
+        assert job.queue == "default"
+        assert job.payload == {"foo": "bar"}
+        assert job.status == rq_sqlite.CLAIMED
+        assert job.attempts == 0
+
+        job.fail("Won't do")
+        raise StopSubscription
+    
+    worker.run()
+
+    assert rq_sqlite.count("default") == 1
+    assert rq_sqlite.count("default", rq_sqlite.FAILED) == 1
+
+    updated_job = rq_sqlite.get(enqueued_job.id)
+    assert updated_job.attempts == 1
+    assert updated_job.status == rq_sqlite.FAILED
+    assert updated_job.error == "Won't do"
+
+
+@pytest.mark.asyncio
+async def test_manual_fail_async(rq_asyncpg: AsyncRaquel):
+    enqueued_job = await rq_asyncpg.enqueue("default", {"foo": "bar"})
+
+    @rq_asyncpg.subscribe("default")
+    async def worker(job: Job):
+        assert job.queue == "default"
+        assert job.payload == {"foo": "bar"}
+        assert job.status == rq_asyncpg.CLAIMED
+        assert job.attempts == 0
+
+        job.fail("Won't do")
+        raise StopSubscription
+    
+    await worker.run()
+
+    assert await rq_asyncpg.count("default") == 1
+    assert await rq_asyncpg.count("default", rq_asyncpg.FAILED) == 1
+
+    updated_job = await rq_asyncpg.get(enqueued_job.id)
+    assert updated_job.attempts == 1
+    assert updated_job.status == rq_asyncpg.FAILED
+    assert updated_job.error == "Won't do"
+
+
+def test_manual_catch_exception(rq_sqlite: Raquel):
+    enqueued_job = rq_sqlite.enqueue("default", {"foo": "bar"})
+
+    @rq_sqlite.subscribe("default")
+    def worker(job: Job):
+        assert job.queue == "default"
+        assert job.payload == {"foo": "bar"}
+        assert job.status == rq_sqlite.CLAIMED
         assert job.attempts == 0
 
         try:
             raise ValueError("Won't do")
         except ValueError as e:
-            job.fail(e)
-        break
+            pass
+        raise StopSubscription
+    
+    worker.run()
 
-    assert simple.count("default") == 1
-    assert simple.count("default", simple.FAILED) == 1
+    assert rq_sqlite.count("default") == 1
+    assert rq_sqlite.count("default", rq_sqlite.SUCCESS) == 1
 
-    updated_job = simple.get(enqueued_job.id)
+    updated_job = rq_sqlite.get(enqueued_job.id)
     assert updated_job.attempts == 1
-    assert updated_job.status == simple.FAILED
-    assert updated_job.error == "Won't do"
-    assert updated_job.error_trace is not None
+    assert updated_job.status == rq_sqlite.SUCCESS
+    assert updated_job.error is None
+
 
 
 @pytest.mark.asyncio
-async def test_fail_subscribe_async(asynchronous: AsyncRaquel):
-    # Perform ENQUEUE
-    enqueued_job = await asynchronous.enqueue("default", {"foo": "bar"})
+async def test_manual_catch_exception_async(rq_asyncpg: AsyncRaquel):
+    enqueued_job = await rq_asyncpg.enqueue("default", {"foo": "bar"})
 
-    # Perform SUBSCRIBE
-    async for job in asynchronous.subscribe("default"):
+    @rq_asyncpg.subscribe("default")
+    async def worker(job: Job):
         assert job.queue == "default"
         assert job.payload == {"foo": "bar"}
-        assert job.status == asynchronous.CLAIMED
+        assert job.status == rq_asyncpg.CLAIMED
         assert job.attempts == 0
 
-        job.fail("Won't do")
-        break
+        try:
+            raise ValueError("Won't do")
+        except ValueError as e:
+            pass
+        raise StopSubscription
+    
+    await worker.run()
 
-    assert await asynchronous.count("default") == 1
-    assert await asynchronous.count("default", asynchronous.FAILED) == 1
+    assert await rq_asyncpg.count("default") == 1
+    assert await rq_asyncpg.count("default", rq_asyncpg.SUCCESS) == 1
 
-    updated_job = await asynchronous.get(enqueued_job.id)
+    updated_job = await rq_asyncpg.get(enqueued_job.id)
     assert updated_job.attempts == 1
-    assert updated_job.status == asynchronous.FAILED
-    assert updated_job.error == "Won't do"
+    assert updated_job.status == rq_asyncpg.SUCCESS
+    assert updated_job.error is None
 
 
-def test_reschedule_subscribe(simple: Raquel):
-    # Perform ENQUEUE
-    enqueued_job = simple.enqueue("default", {"foo": "bar"})
+def test_reschedule(rq_sqlite: Raquel):
+    enqueued_job = rq_sqlite.enqueue("default", {"foo": "bar"})
 
-    # Perform SUBSCRIBE
-    for i, job in enumerate(simple.subscribe("default")):
+    @rq_sqlite.subscribe("default")
+    def worker(job: Job):
         assert job.queue == "default"
         assert job.payload == {"foo": "bar"}
-        assert job.status == simple.CLAIMED
+        assert job.status == rq_sqlite.CLAIMED
         assert job.attempts == 0
 
-        if i == 0:
-            job.reschedule(delay=1)
-        elif i == 1:
-            break
+        job.reschedule(delay=1000)
+        raise StopSubscription
+    
+    worker.run()
 
-    assert simple.count("default") == 1
-    assert simple.count("default", simple.SUCCESS) == 1
+    assert rq_sqlite.count("default") == 1
+    assert rq_sqlite.count("default", rq_sqlite.QUEUED) == 1
 
-    completed_job = simple.get(enqueued_job.id)
-    assert completed_job.attempts == 1
-    assert completed_job.status == simple.SUCCESS
-    assert completed_job.claimed_at != None
-    assert completed_job.scheduled_at < datetime.now(timezone.utc)
+    updated_job = rq_sqlite.get(enqueued_job.id)
+    assert updated_job.attempts == 0
+    assert updated_job.status == rq_sqlite.QUEUED
+    assert updated_job.error is None
+    assert updated_job.scheduled_at > datetime.now(timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_reschedule_async(rq_asyncpg: AsyncRaquel):
+    enqueued_job = await rq_asyncpg.enqueue("default", {"foo": "bar"})
+
+    @rq_asyncpg.subscribe("default")
+    async def worker(job: Job):
+        assert job.queue == "default"
+        assert job.payload == {"foo": "bar"}
+        assert job.status == rq_asyncpg.CLAIMED
+        assert job.attempts == 0
+
+        job.reschedule(delay=1000)
+        raise StopSubscription
+    
+    await worker.run()
+
+    assert await rq_asyncpg.count("default") == 1
+    assert await rq_asyncpg.count("default", rq_asyncpg.QUEUED) == 1
+
+    updated_job = await rq_asyncpg.get(enqueued_job.id)
+    assert updated_job.attempts == 0
+    assert updated_job.status == rq_asyncpg.QUEUED
+    assert updated_job.error is None
+    assert updated_job.scheduled_at > datetime.now(timezone.utc)

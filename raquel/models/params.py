@@ -6,7 +6,7 @@ class EnqueueParams:
     queue: str
     serialized_payload: str | None
     max_age_ms: int | None
-    max_retry_count: int | None 
+    max_retry_count: int | None
     min_retry_delay: int
     max_retry_delay: int
     backoff_base: int

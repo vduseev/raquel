@@ -7,7 +7,7 @@ from raquel import Raquel, AsyncRaquel
 
 
 @pytest.fixture
-def simple():
+def rq_sqlite():
     logging.getLogger("raquel").setLevel(logging.DEBUG)
 
     instance = Raquel("sqlite://")
@@ -16,7 +16,7 @@ def simple():
 
 
 @pytest.fixture
-def normal():
+def rq_psycopg2():
     logging.getLogger("raquel").setLevel(logging.DEBUG)
 
     instance = Raquel("postgresql+psycopg2://postgres:postgres@localhost:6432/postgres")
@@ -28,7 +28,7 @@ def normal():
 
 
 @pytest_asyncio.fixture
-async def asynchronous():
+async def rq_asyncpg():
     logging.getLogger("raquel").setLevel(logging.DEBUG)
 
     instance = AsyncRaquel("postgresql+asyncpg://postgres:postgres@localhost:6432/postgres")

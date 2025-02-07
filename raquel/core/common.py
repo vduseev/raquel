@@ -3,7 +3,7 @@ from datetime import datetime, timezone, timedelta
 from uuid import UUID
 from typing import Any
 
-from raquel.models.base_raquel import BaseRaquel
+from raquel.core.base import BaseRaquel
 from raquel.models.base_job import BaseJob
 from raquel.models.params import EnqueueParams, ClaimParams
 
@@ -16,12 +16,12 @@ def validate_queue_name(queue: str) -> None:
 def validate_job_id(job_id: UUID) -> None:
     if not job_id or not isinstance(job_id, UUID):
         raise ValueError("Job ID must be a UUID")
-    
+
 
 def validate_claim_as(claim_as: str) -> None:
     if claim_as is not None and not isinstance(claim_as, str):
         raise ValueError("claim_as must be a string")
-    
+
 
 def validate_status(status: str) -> None:
     if status is not None and not isinstance(status, str):

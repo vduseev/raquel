@@ -4,12 +4,23 @@ from uuid import UUID
 from typing import Any, Literal
 
 
+JobStatusValueType = Literal[
+    "queued",
+    "claimed",
+    "success",
+    "failed",
+    "expired",
+    "exhausted",
+    "cancelled",
+]
+
+
 @dataclass
 class BaseJob:
     id: UUID
     queue: str
     payload: Any | None
-    status: Literal['queued', 'claimed', 'success', 'failed', 'expired', 'exhausted', 'cancelled'] | None
+    status: JobStatusValueType | None
     max_age: int | None
     max_retry_count: int | None
     min_retry_delay: int | None

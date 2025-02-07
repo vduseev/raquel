@@ -44,16 +44,28 @@ rq.enqueue(queue="tasks", payload={"data": [1, 2]})
 On the worker side, pick jobs from the queue and process them:
 
 ```python
-import time
-from raquel import Raquel
+from raquel import Raquel, Job
 
 rq = Raquel("postgresql+psycopg2://postgres:postgres@localhost/postgres")
 
-# This loop will run forever, picking up jobs from the "messages" and  "tasks"
-# queues as their scheduled time comes.
-for job in rq.subscribe("messages", "tasks"):
+@rq.subscribe("messages", "tasks")
+def worker(job: Job):
     do_work(job.payload)
+
+# This loop will run forever, picking up jobs from the "messages" and  "tasks"
+# queues every second as their scheduled time approaches.
+worker.run()
 ```
+
+A couple of cool things are happening here:
+
+1. The worker will pick up jobs as they arrive.
+1. A successfully processed job will have its status set to `success` after
+    the processing is done.
+1. Any exception raised by the `do_work()` function will be caught, stored in
+   the job record, and the job will be rescheduled for a retry. The job status
+    will be set to `failed`.
+1. You can launch the subscribed worker in a separate thread if you want to.
 
 Or, if you prefer, you can use a more hands-on approach, by manually dequeuing
 jobs. In fact, this is exactly what the `subscribe()` method does under the
@@ -94,15 +106,15 @@ Worker:
 
 ```python
 import asyncio
-from raquel import AsyncRaquel
+from raquel import AsyncRaquel, Job
 
 rq = AsyncRaquel("postgresql+asyncpg://postgres:postgres@localhost/postgres")
 
-async def main():
-    async for job in rq.subscribe():
-        await do_work(job.payload)
+@rq.subscribe("default")
+async def worker(job: Job):
+    await do_work(job.payload)
 
-asyncio.run(main())
+asyncio.run(worker.run())
 ```
 
 ## The `jobs` table

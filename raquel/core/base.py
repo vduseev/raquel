@@ -3,12 +3,17 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import update, Update
 
-from .base_job import BaseJob
-from .raw_job import RawJob
+from raquel.models.base_job import BaseJob
+from raquel.models.raw_job import RawJob
+
+
+class StopSubscription(BaseException):
+    pass
 
 
 class BaseRaquel:
     """This class exists for proper type hinting and dependency inversion."""
+
     QUEUED = "queued"
     CLAIMED = "claimed"
     SUCCESS = "success"
@@ -28,20 +33,32 @@ class BaseRaquel:
         return stmt
 
     @staticmethod
-    def _success_statement(job_id: UUID, attempt_num: int, finished_at: int) -> Update:
+    def _success_statement(
+        job_id: UUID, attempt_num: int, finished_at: int
+    ) -> Update:
         stmt = (
             update(RawJob)
             .where(RawJob.id == job_id)
-            .values(status=BaseRaquel.SUCCESS, attempts=attempt_num, finished_at=finished_at)
+            .values(
+                status=BaseRaquel.SUCCESS,
+                attempts=attempt_num,
+                finished_at=finished_at,
+            )
         )
         return stmt
-    
+
     @staticmethod
-    def _exhausted_statement(job_id: UUID, attempt_num: int, finished_at: int) -> Update:
+    def _exhausted_statement(
+        job_id: UUID, attempt_num: int, finished_at: int
+    ) -> Update:
         stmt = (
             update(RawJob)
             .where(RawJob.id == job_id)
-            .values(status=BaseRaquel.EXHAUSTED, attempts=attempt_num, finished_at=finished_at)
+            .values(
+                status=BaseRaquel.EXHAUSTED,
+                attempts=attempt_num,
+                finished_at=finished_at,
+            )
         )
         return stmt
 
@@ -66,7 +83,7 @@ class BaseRaquel:
             )
         )
         return stmt
-    
+
     @staticmethod
     def _failed_statement(
         job: BaseJob,
@@ -74,9 +91,11 @@ class BaseRaquel:
         finished_at: int,
     ) -> Update:
         # Calculate when to schedule the next attempt
-        planned_delay = job.backoff_base * 2 ** attempt_num
+        planned_delay = job.backoff_base * 2**attempt_num
         # Clamp the delay to the min and max values
-        actual_delay = min(max(job.min_retry_delay, planned_delay), job.max_retry_delay)
+        actual_delay = min(
+            max(job.min_retry_delay, planned_delay), job.max_retry_delay
+        )
         # Compute how much time it took to process the job
         duration = (finished_at - (job.claimed_at.timestamp() * 1000)) / 1000
         # Reschedule based on this values
