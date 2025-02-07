@@ -47,6 +47,7 @@ class Subscription:
         self.stop_event = Event()
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> None:
+        logger.info(f"Starting {self.fn.__module__}.{self.fn.__qualname__} subscription to queues {self.queues}")
         while True:
             try:
                 if self.stop_event.is_set():
@@ -64,7 +65,12 @@ class Subscription:
                         time.sleep(self.sleep / 1000)
 
             except StopSubscription:
+                logger.debug(f"Subscription interrupted by StopSubscription signal")
                 return
+            except KeyboardInterrupt:
+                logger.debug(f"Subscription interrupted by KeyboardInterrput signal")
+                raise
+
 
     def run(self, *args: P.args, **kwargs: P.kwargs) -> None:
         """Launch the subscription.

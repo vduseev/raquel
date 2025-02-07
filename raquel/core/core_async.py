@@ -50,6 +50,7 @@ class AsyncSubscription:
         self.stop_event = asyncio.Event()
 
     async def __call__(self, *args: P.args, **kwargs: P.kwargs) -> None:
+        logger.info(f"Starting {self.fn.__module__}.{self.fn.__qualname__} subscription to queues {self.queues}")
         while True:
             try:
                 if self.stop_event.is_set():
@@ -66,8 +67,15 @@ class AsyncSubscription:
                     else:
                         await asyncio.sleep(self.sleep / 1000)
 
-            except (StopSubscription, GeneratorExit):
+            except StopSubscription:
+                logger.debug(f"Subscription interrupted by StopSubscription signal")
                 return
+            except KeyboardInterrupt:
+                logger.debug(f"Subscription interrupted by KeyboardInterrupt signal")
+                raise
+            except asyncio.CancelledError:
+                logger.debug(f"Subscription interrupted by CancelledError signal")
+                raise
 
     async def run(self, *args: P.args, **kwargs: P.kwargs) -> None:
         """Launch the subscription.
