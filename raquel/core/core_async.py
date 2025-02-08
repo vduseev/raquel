@@ -155,8 +155,7 @@ class AsyncDequeueContextManager:
         if not self.job:
             return None
 
-        self.session = AsyncSession(self.broker.engine)
-        self.session.begin()
+        self.session = self.broker.async_session_factory()
 
         # Lock the job with database lock
         lock_job_stmt = (
@@ -174,9 +173,53 @@ class AsyncDequeueContextManager:
     async def __aexit__(
         self, exc_type: Any, exc_value: Any, traceback: Any
     ) -> None:
-        if exc_type is KeyboardInterrupt:
-            return False
-        if exc_type is asyncio.CancelledError:
+        """Handle exceptions and update the job status.
+        
+        This method is called after the context manager exits. No matter what
+        has happened. There are several possible scenarios:
+
+        A. There was no job to process. 
+
+            The session was not created, so there is nothing to do. Just
+            return True to indicate that there was no exception.
+
+        B. SIGINT was received while processing the job.
+
+            It doesn't matter at which stage of the processing we were.
+            
+            B-1) If there was no job, fine. We exit anyway but we return
+            False to propagate the interruption signal up the call stack.
+            
+            B-2) If we were in the middle of processing the job, then in
+            addition to rolling back the current transaction we also have to
+            unclaim the job.
+
+        C. The StopSubscription signal was raised while processing the job.
+
+            This is a healthy way to stop the subscription. We treat it as
+            a successful execution and finish processing and updating the job
+            properly. We then return False to propagate the signal up to
+            the `subscribe()` decorator.
+
+        D. An unhandled exception occurred while processing the job.
+
+            We mark the job as failed and reschedule it for another attempt.
+
+            If raise_stop_on_unhandled_exc is True, we also raise a
+            StopSubscription signal to stop the subscription.
+
+        E. The job was processed successfully.
+
+            We mark the job as successful and return True to indicate that
+            there was no exception.
+        """
+
+        if exc_type in (KeyboardInterrupt, asyncio.CancelledError):
+            if self.session:
+                await self.session.rollback()
+                await self.session.close()
+            if self.job:
+                await self.broker.unclaim(self.job.id)
             return False
 
         if not self.job:
@@ -189,9 +232,8 @@ class AsyncDequeueContextManager:
 
         # If the exception was not manually caught by the developer,
         # mark the job as failed.
-        if exc_type and not exc_type is StopSubscription:
-            # Build the exception back from its components
-            self.exception = exc_type(exc_value)
+        if exc_type and exc_type is not StopSubscription:
+            self.exception = exc_value
             logger.error(
                 f"Failed to process job {self.job.id} (attempt {self.attempt_num}): {self.exception}",
                 exc_info=self.exception,
@@ -203,12 +245,12 @@ class AsyncDequeueContextManager:
         stmt: Update | None = None
 
         if self.job._failed:
+            # Do not retry a job that has exceeded the maximum number
+            # of retries.
             if (
                 self.job.max_retry_count is not None
                 and self.attempt_num + 1 > self.job.max_retry_count
             ):
-                # Do not retry a job that has exceeded the maximum number
-                # of retries.
                 logger.debug(
                     f"Job {self.job.id} has exceeded the maximum number of retries ({self.job.max_retry_count})"
                 )
@@ -216,8 +258,8 @@ class AsyncDequeueContextManager:
                     self.job.id, self.attempt_num, finished_at_ms
                 )
 
+            # Mark the job as failed and schedule the next attempt.
             else:
-                # Mark the job as failed and schedule the next attempt.
                 logger.debug(f"Rescheduling job {self.job.id}")
                 stmt = self.broker._failed_statement(
                     self.job, self.attempt_num, finished_at_ms
@@ -251,13 +293,14 @@ class AsyncDequeueContextManager:
         if self.raise_stop_on_unhandled_exc and exc_type:
             raise StopSubscription
 
-        # Indicate that all uncaught exceptions were handled inside the
-        # context manager and should be suppressed.
-        if exc_type is not StopSubscription:
-            return True
-        # Special case to allow the StopSubscription exception to propagate
-        else:
+        # If StopSubscription is raised inside the context manager, allow
+        # it to propagate.
+        if exc_type is StopSubscription:
             return False
+
+        # Indicate that all other uncaught exceptions were handled inside the
+        # context manager and should be suppressed.
+        return True
 
 
 class AsyncRaquel(BaseRaquel):
@@ -305,7 +348,7 @@ class AsyncRaquel(BaseRaquel):
 
     def __init__(self, url: str | URL, **kwargs: Any) -> None:
         self.engine = create_async_engine(url, **kwargs)
-        self.async_session = async_sessionmaker(
+        self.async_session_factory = async_sessionmaker(
             self.engine, expire_on_commit=False
         )
         self.subscriptions: list[AsyncSubscription] = []
@@ -375,25 +418,26 @@ class AsyncRaquel(BaseRaquel):
             Job: The created job.
         """
         p = common.parse_enqueue_params(
-            queue,
-            payload,
-            at,
-            delay,
-            max_age,
-            max_retry_count,
-            min_retry_delay,
-            max_retry_delay,
+            queue=queue,
+            payload=payload,
+            at=at,
+            delay=delay,
+            max_age=max_age,
+            max_retry_count=max_retry_count,
+            min_retry_delay=min_retry_delay,
+            max_retry_delay=max_retry_delay,
             backoff_base=backoff_base,
         )
 
         # Insert the job
-        async with self.async_session() as session:
+        job: Job | None = None
+        async with self.async_session_factory() as session:
             raw_job = RawJob.from_enqueue_params(p)
             session.add(raw_job)
             await session.commit()
 
             job = Job.from_raw_job(raw_job)
-            return job
+        return job
 
     def subscribe(
         self,
@@ -554,7 +598,8 @@ class AsyncRaquel(BaseRaquel):
         p = common.parse_claim_params(
             *queues, before=before, claim_as=claim_as
         )
-        async with self.async_session() as session:
+        job: Job | None = None
+        async with self.async_session_factory() as session:
             # Retrieve the earliest scheduled job in the queue and lock the row.
             where_clause = (
                 RawJob.status.in_([self.QUEUED, self.FAILED]),
@@ -576,27 +621,53 @@ class AsyncRaquel(BaseRaquel):
             raw_job = select_oldest_result.scalars().first()
             if not raw_job:
                 logger.debug(f"No job available in queue {queues}")
-                return None
-
-            # Lock the job
-            update_claim_stmt = (
-                update(RawJob)
-                .where(RawJob.id == raw_job.id)
-                .values(
-                    status=self.CLAIMED,
-                    claimed_at=p.before_ms,
-                    claimed_by=p.claim_as,
+            else:
+                # Lock the job
+                update_claim_stmt = (
+                    update(RawJob)
+                    .where(RawJob.id == raw_job.id)
+                    .values(
+                        status=self.CLAIMED,
+                        claimed_at=p.before_ms,
+                        claimed_by=p.claim_as,
+                    )
                 )
-            )
-            await session.execute(update_claim_stmt)
-            await session.commit()
+                await session.execute(update_claim_stmt)
+                await session.commit()
 
-            job = Job.from_raw_job(raw_job)
-            job.status = self.CLAIMED
-            job.claimed_at = datetime.fromtimestamp(
-                p.before_ms / 1000, timezone.utc
+                job = Job.from_raw_job(raw_job)
+                job.status = self.CLAIMED
+                job.claimed_at = datetime.fromtimestamp(
+                    p.before_ms / 1000, timezone.utc
+                )
+        return job
+    
+    async def unclaim(self, job_id: UUID) -> bool:
+        """Release the claim on a job.
+
+        This method is used to release the claim lock on a job that was
+        previously claimed. The job will be available for processing by
+        another worker.
+
+        Only updates the job if it is in the "claimed" status. Sets the
+        status to "queued" and clears the claimed_at and claimed_by fields.
+
+        Args:
+            job_id (UUID): Job ID.
+
+        Returns:
+            bool: True if the job was successfully unclaimed.
+        """
+        common.validate_job_id(job_id)
+        async with self.async_session_factory() as session:
+            stmt = (
+                update(RawJob)
+                .where(RawJob.id == job_id, RawJob.status == self.CLAIMED)
+                .values(status=self.QUEUED, claimed_at=None, claimed_by=None)
             )
-            return job
+            result = await session.execute(stmt)
+            await session.commit()
+            return result.rowcount == 1
 
     async def expire(self, *queues: str) -> int:
         """Cancel all expired jobs in the queue.
@@ -610,7 +681,7 @@ class AsyncRaquel(BaseRaquel):
         for queue in queues:
             common.validate_queue_name(queue)
 
-        async with self.async_session() as session:
+        async with self.async_session_factory() as session:
             where_clause = (
                 RawJob.status.in_([self.QUEUED, self.FAILED]),
                 RawJob.max_age.is_not(None),
@@ -637,7 +708,7 @@ class AsyncRaquel(BaseRaquel):
             Job | None: The job or None if not found.
         """
         common.validate_job_id(job_id)
-        async with self.async_session() as session:
+        async with self.async_session_factory() as session:
             stmt = select(RawJob).where(RawJob.id == job_id)
             result = await session.execute(stmt)
             raw_job = result.scalars().first()
@@ -662,7 +733,7 @@ class AsyncRaquel(BaseRaquel):
             job_id (UUID): Job ID.
         """
         common.validate_job_id(job_id)
-        async with self.async_session() as session:
+        async with self.async_session_factory() as session:
             stmt = self._reject_statement(job_id)
             result = await session.execute(stmt)
             await session.commit()
@@ -681,7 +752,7 @@ class AsyncRaquel(BaseRaquel):
             job_id (UUID): Job ID.
         """
         common.validate_job_id(job_id)
-        async with self.async_session() as session:
+        async with self.async_session_factory() as session:
             stmt = (
                 update(RawJob)
                 .where(
@@ -717,7 +788,7 @@ class AsyncRaquel(BaseRaquel):
                 Defaults to now (UTC).
         """
         common.validate_job_id(job_id)
-        async with self.async_session() as session:
+        async with self.async_session_factory() as session:
             if not finished_at:
                 finished_at = datetime.now(timezone.utc)
             finished_at_ms = int(finished_at.timestamp() * 1000)
@@ -751,7 +822,7 @@ class AsyncRaquel(BaseRaquel):
                 Defaults to now (UTC).
         """
         common.validate_job_id(job.id)
-        async with self.async_session() as session:
+        async with self.async_session_factory() as session:
             if not finished_at:
                 finished_at = datetime.now(timezone.utc)
             finished_at_ms = int(finished_at.timestamp() * 1000)
@@ -768,7 +839,7 @@ class AsyncRaquel(BaseRaquel):
         Returns:
             list[str]: List of all queues.
         """
-        async with self.async_session() as session:
+        async with self.async_session_factory() as session:
             queues: list[str] = []
             stmt = select(RawJob.queue).group_by(RawJob.queue)
             result = await session.execute(stmt)
@@ -785,7 +856,7 @@ class AsyncRaquel(BaseRaquel):
         Returns:
             dict[str, QueueStats]: All queues and their statistics.
         """
-        async with self.async_session() as session:
+        async with self.async_session_factory() as session:
             stats: dict[str, QueueStats] = {}
             stmt = select(
                 RawJob.queue,
@@ -824,7 +895,7 @@ class AsyncRaquel(BaseRaquel):
         for queue in queues:
             common.validate_queue_name(queue)
 
-        async with self.async_session() as session:
+        async with self.async_session_factory() as session:
             results: list[Job] = []
             stmt = select(RawJob)
             if queues:
@@ -883,7 +954,7 @@ class AsyncRaquel(BaseRaquel):
             for s in status:
                 common.validate_status(s)
 
-        async with self.async_session() as session:
+        async with self.async_session_factory() as session:
             stmt = select(func.count(RawJob.id))
             if queue:
                 stmt = stmt.where(RawJob.queue == queue)

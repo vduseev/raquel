@@ -148,7 +148,6 @@ class DequeueContextManager:
             return None
 
         self.session = Session(self.broker.engine)
-        self.session.begin()
 
         # Lock the job with database lock
         lock_job_stmt = (
@@ -164,7 +163,53 @@ class DequeueContextManager:
         return self.job
 
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
+        """Handle exceptions and update the job status.
+        
+        This method is called after the context manager exits. No matter what
+        has happened. There are several possible scenarios:
+
+        A. There was no job to process. 
+
+            The session was not created, so there is nothing to do. Just
+            return True to indicate that there was no exception.
+
+        B. SIGINT was received while processing the job.
+
+            It doesn't matter at which stage of the processing we were.
+            
+            B-1) If there was no job, fine. We exit anyway but we return
+            False to propagate the interruption signal up the call stack.
+            
+            B-2) If we were in the middle of processing the job, then in
+            addition to rolling back the current transaction we also have to
+            unclaim the job.
+
+        C. The StopSubscription signal was raised while processing the job.
+
+            This is a healthy way to stop the subscription. We treat it as
+            a successful execution and finish processing and updating the job
+            properly. We then return False to propagate the signal up to
+            the `subscribe()` decorator.
+
+        D. An unhandled exception occurred while processing the job.
+
+            We mark the job as failed and reschedule it for another attempt.
+
+            If raise_stop_on_unhandled_exc is True, we also raise a
+            StopSubscription signal to stop the subscription.
+
+        E. The job was processed successfully.
+
+            We mark the job as successful and return True to indicate that
+            there was no exception.
+        """
+
         if exc_type is KeyboardInterrupt:
+            if self.session:
+                self.session.rollback()
+                self.session.close()
+            if self.job:
+                self.broker.unclaim(self.job.id)
             return False
 
         if not self.job:
@@ -179,7 +224,7 @@ class DequeueContextManager:
         # mark the job as failed.
         if exc_type and not exc_type is StopSubscription:
             # Build the exception back from its components
-            self.exception = exc_type(exc_value)
+            self.exception = exc_value
             logger.error(
                 f"Failed to process job {self.job.id} (attempt {self.attempt_num}): {self.exception}",
                 exc_info=self.exception,
@@ -239,13 +284,14 @@ class DequeueContextManager:
         if self.raise_stop_on_unhandled_exc and exc_type:
             raise StopSubscription
 
-        # Indicate that all uncaught exceptions were handled inside the
-        # context manager and should be suppressed.
-        if exc_type is not StopSubscription:
-            return True
-        # Special case to allow the StopSubscription exception to propagate
-        else:
+          # If StopSubscription is raised inside the context manager, allow
+        # it to propagate.
+        if exc_type is StopSubscription:
             return False
+        
+        # Indicate that all other uncaught exceptions were handled inside the
+        # context manager and should be suppressed.
+        return True
 
 
 class Raquel(BaseRaquel):
@@ -578,6 +624,33 @@ class Raquel(BaseRaquel):
             )
             return job
 
+    def unclaim(self, job_id: UUID) -> bool:
+        """Release the claim on a job.
+
+        This method is used to release the claim lock on a job that was
+        previously claimed. The job will be available for processing by
+        another worker.
+
+        Only updates the job if it is in the "claimed" status. Sets the
+        status to "queued" and clears the claimed_at and claimed_by fields.
+
+        Args:
+            job_id (UUID): Job ID.
+
+        Returns:
+            bool: True if the job was successfully unclaimed.
+        """
+        common.validate_job_id(job_id)
+        with Session(self.engine) as session:
+            stmt = (
+                update(RawJob)
+                .where(RawJob.id == job_id, RawJob.status == self.CLAIMED)
+                .values(status=self.QUEUED, claimed_at=None, claimed_by=None)
+            )
+            result = session.execute(stmt)
+            session.commit()
+            return result.rowcount == 1
+
     def expire(self, *queues: str) -> int:
         """Cancel all expired jobs in the queue.
 
@@ -653,7 +726,7 @@ class Raquel(BaseRaquel):
         Only jobs in the "queued" or "failed" status can be cancelled. For
         anything else, this method will have no effect.
 
-        **Warning**: Calling this method inside the ``dequeue()`` context
+        Warning: Calling this method inside the ``dequeue()`` context
         manager will not have any effect.
 
         Args:
