@@ -44,7 +44,7 @@ class Job(BaseJob):
     it changes to "exhausted".
     """
     max_age: int | None = field(default=None)
-    """The maximum allowed time from enqueuing to processing.
+    """The maximum allowed time in milliseconds from enqueuing to processing.
     
     If the job is not processed within this time, it will not be processed
     at all.
@@ -55,19 +55,19 @@ class Job(BaseJob):
     If the job fails, it will be retried up to this number of times.
     """
     min_retry_delay: int | None = field(default=1000)
-    """The minimum retry delay.
+    """The minimum retry delay in milliseconds.
 
     This is the minimum amount of time to wait before retrying a failed job.
     The delay between retries won't be less than this value.
     """
     max_retry_delay: int | None = field(default=12 * 3600 * 1000)
-    """The maximum retry delay.
+    """The maximum retry delay in milliseconds.
 
     This is the maximum amount of time to wait before retrying a failed job.
     The delay between retries won't exceed this value.
     """
     backoff_base: int | None = field(default=1000)
-    """The base delay for exponential backoff during retry.
+    """The base delay in milliseconds for exponential backoff during retry.
 
     The delay between retries is calculated as ``base * 2 ** retry`` in milliseconds.
     Then it is clamped between ``min_retry_delay`` and ``max_retry_delay``.

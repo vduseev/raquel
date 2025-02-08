@@ -118,15 +118,16 @@ def parse_claim_params(
         validate_queue_name(queue)
     validate_claim_as(claim_as)
 
-    now = int(datetime.now(timezone.utc).timestamp() * 1000)
+    now = datetime.now(timezone.utc)
+    now_ms = int(now.timestamp() * 1000)
     if before is None:
-        before = now
+        before = now_ms
     if isinstance(before, datetime):
         before = int(before.timestamp() * 1000)
 
     return ClaimParams(
         queues=list(queues) if queues else [],
-        now_ms=now,
+        now_ms=now_ms,
         before_ms=before,
         claim_as=claim_as,
     )

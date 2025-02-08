@@ -97,11 +97,11 @@ class BaseRaquel:
             max(job.min_retry_delay, planned_delay), job.max_retry_delay
         )
         # Compute how much time it took to process the job
-        duration = (finished_at - (job.claimed_at.timestamp() * 1000)) / 1000
+        duration = finished_at - (job.claimed_at.timestamp() * 1000)
         # Reschedule based on this values
         reschedule_at = (
-            job.scheduled_at
-            + timedelta(seconds=duration)
+            job.claimed_at
+            + timedelta(milliseconds=duration)
             + timedelta(milliseconds=actual_delay)
         )
 
