@@ -164,11 +164,11 @@ class DequeueContextManager:
 
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
         """Handle exceptions and update the job status.
-        
+
         This method is called after the context manager exits. No matter what
         has happened. There are several possible scenarios:
 
-        A. There was no job to process. 
+        A. There was no job to process.
 
             The session was not created, so there is nothing to do. Just
             return True to indicate that there was no exception.
@@ -176,10 +176,10 @@ class DequeueContextManager:
         B. SIGINT was received while processing the job.
 
             It doesn't matter at which stage of the processing we were.
-            
+
             B-1) If there was no job, fine. We exit anyway but we return
             False to propagate the interruption signal up the call stack.
-            
+
             B-2) If we were in the middle of processing the job, then in
             addition to rolling back the current transaction we also have to
             unclaim the job.
@@ -284,11 +284,11 @@ class DequeueContextManager:
         if self.raise_stop_on_unhandled_exc and exc_type:
             raise StopSubscription
 
-          # If StopSubscription is raised inside the context manager, allow
+        # If StopSubscription is raised inside the context manager, allow
         # it to propagate.
         if exc_type is StopSubscription:
             return False
-        
+
         # Indicate that all other uncaught exceptions were handled inside the
         # context manager and should be suppressed.
         return True
