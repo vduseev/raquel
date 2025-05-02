@@ -1,0 +1,65 @@
+direction: right
+style.opacity: 0.0
+
+queued: {
+  label: "Queued\n(ready to be\nclaimed)"
+  shape: circle
+  style.font-color: black
+}
+
+claimed: {
+  label: "Claimed\n(for processing)"
+  shape: circle
+  style.font-color: black
+}
+
+cancelled: {
+  label: "Cancelled\n(manually)"
+  shape: circle
+  style.stroke: gray
+  style.fill: lightgray
+  style.font-color: dimgray
+}
+
+success: {
+  label: "Success\n(executed with\nno exceptions)"
+  shape: circle
+  style.stroke: green
+  style.fill: lightgreen
+  style.font-color: darkgreen
+}
+
+failed: {
+  label: "Failed\n(exception\ncaught or job\nmarked as failed)"
+  shape: circle
+  style.stroke: red
+  style.fill: mistyrose
+  style.font-color: darkred
+}
+
+expired: {
+  label: "Expired\n(max_age\nexceeded)"
+  shape: circle
+  style.stroke: orange
+  style.fill: moccasin
+  style.font-color: saddlebrown
+}
+
+exhausted: {
+  label: "Exhausted\n(max retries)"
+  shape: circle
+  style.stroke: purple
+  style.fill: plum
+  style.font-color: indigo
+}
+
+queued -> claimed: "job claimed"
+
+claimed -> success: "worker successfully\nprocessed the job"
+claimed -> failed: "exception raised\n(caught by worker)\nor job marked\nas failed"
+claimed -> cancelled: "manually\ncancelled"
+
+queued -> expired: "expiration\ndetected\nduring\nclaim attempt"
+
+failed -> queued: "rescheduled for retry\n(exponential backoff)"
+failed -> exhausted: "give up\n(max retry count reached)"
