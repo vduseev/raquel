@@ -685,7 +685,7 @@ class AsyncRaquel(BaseRaquel):
             where_clause = (
                 RawJob.status.in_([self.QUEUED, self.FAILED]),
                 RawJob.max_age.is_not(None),
-                RawJob.enqueued_at + RawJob.max_age
+                RawJob.scheduled_at + RawJob.max_age
                 <= int(datetime.now(timezone.utc).timestamp() * 1000),
             )
             if queues:
