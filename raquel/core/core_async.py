@@ -272,11 +272,15 @@ class AsyncDequeueContextManager:
 
             if self.job._rejected:
                 # Put the job back in the queue
-                stmt = self.broker._reject_statement(self.job.id)
+                stmt = self.broker._reject_statement(
+                    self.job.id, self.attempt_num
+                )
             elif self.job._rescheduled:
                 # Reschedule the job for later
                 stmt = self.broker._reschedule_statement(
-                    self.job, self.job._rescheduled_at
+                    self.job,
+                    self.job._rescheduled_at,
+                    attempt_num=self.attempt_num,
                 )
             else:
                 # Update the job status to "success"
@@ -717,7 +721,7 @@ class AsyncRaquel(BaseRaquel):
             job = Job.from_raw_job(raw_job)
             return job
 
-    async def reject(self, job_id: UUID) -> bool:
+    async def reject(self, job_id: UUID, attempt_num: int) -> bool:
         """Reverse the claim on a job.
 
         This will remove the claim on the job allowing it to be claimed by
@@ -734,7 +738,7 @@ class AsyncRaquel(BaseRaquel):
         """
         common.validate_job_id(job_id)
         async with self.async_session_factory() as session:
-            stmt = self._reject_statement(job_id)
+            stmt = self._reject_statement(job_id, attempt_num)
             result = await session.execute(stmt)
             await session.commit()
             return result.rowcount == 1

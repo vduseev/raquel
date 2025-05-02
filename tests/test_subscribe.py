@@ -94,7 +94,7 @@ def test_reject_subscribe(rq_sqlite: Raquel):
     assert rq_sqlite.count("default", rq_sqlite.QUEUED) == 1
 
     updated_job = rq_sqlite.get(enqueued_job.id)
-    assert updated_job.attempts == 0
+    assert updated_job.attempts == 1
     assert updated_job.status == rq_sqlite.QUEUED
     assert updated_job.claimed_at == None
 
@@ -120,7 +120,7 @@ async def test_reject_subscribe_async(rq_asyncpg: AsyncRaquel):
     assert await rq_asyncpg.count("default", rq_asyncpg.QUEUED) == 1
 
     updated_job = await rq_asyncpg.get(enqueued_job.id)
-    assert updated_job.attempts == 0
+    assert updated_job.attempts == 1
     assert updated_job.status == rq_asyncpg.QUEUED
     assert updated_job.claimed_at == None
 
@@ -296,7 +296,7 @@ def test_reschedule(rq_sqlite: Raquel):
     assert rq_sqlite.count("default", rq_sqlite.QUEUED) == 1
 
     updated_job = rq_sqlite.get(enqueued_job.id)
-    assert updated_job.attempts == 0
+    assert updated_job.attempts == 1
     assert updated_job.status == rq_sqlite.QUEUED
     assert updated_job.error is None
     assert updated_job.scheduled_at > datetime.now(timezone.utc)
@@ -322,7 +322,7 @@ async def test_reschedule_async(rq_asyncpg: AsyncRaquel):
     assert await rq_asyncpg.count("default", rq_asyncpg.QUEUED) == 1
 
     updated_job = await rq_asyncpg.get(enqueued_job.id)
-    assert updated_job.attempts == 0
+    assert updated_job.attempts == 1
     assert updated_job.status == rq_asyncpg.QUEUED
     assert updated_job.error is None
     assert updated_job.scheduled_at > datetime.now(timezone.utc)

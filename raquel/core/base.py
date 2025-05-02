@@ -24,11 +24,16 @@ class BaseRaquel:
     DEFAULT = "default"
 
     @staticmethod
-    def _reject_statement(job_id: UUID) -> Update:
+    def _reject_statement(job_id: UUID, attempt_num: int) -> Update:
         stmt = (
             update(RawJob)
             .where(RawJob.id == job_id)
-            .values(status=BaseRaquel.QUEUED, claimed_at=None, claimed_by=None)
+            .values(
+                status=BaseRaquel.QUEUED,
+                claimed_at=None,
+                claimed_by=None,
+                attempts=attempt_num,
+            )
         )
         return stmt
 
