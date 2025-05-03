@@ -268,7 +268,8 @@ The first two are most common. The job will be picked up if:
 The job in `claimed` state is a special case and happens when some worker
 marked the job as claimed but failed to process it. In this case the row,
 representing the job, is not locked in the database. If more than a minute
-passed since the job was claimed (`claimed_at + 1 minute`), any worker can
+passed since the job was claimed (`claimed_at + 1 minute`) and the row is
+not locked (meaning the worker that claimed it is dead), any worker can
 reclaim it for itself.
 
 ## How do we guarantee that the same job is not picked up by multiple workers?
