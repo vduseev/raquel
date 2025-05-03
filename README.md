@@ -276,9 +276,11 @@ reclaim it for itself.
 
 Short answer: by locking the row and using the `claimed` status.
 
-In PostgreSQL, we use the `SELECT FOR UPDATE SKIP LOCKED` statement is used.
-In other databases that support this (such as Oracle, MySQL) a similar approach
-is used.
+In PostgreSQL, the `SELECT FOR UPDATE SKIP LOCKED` statement is used when
+selecting the job. This statement locks the row for the duration of the
+transaction and allows other workers to see that the row is locked.
+In other databases that support this (such as Oracle, MySQL) a similar
+approach is used.
 
 In extremely simple databases, such as SQLite, the fact that the whole
 database is locked during a write operation guarantees that no other worker
