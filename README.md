@@ -168,11 +168,16 @@ it directly offers a bit more flexibility but you have to make a call to the
 `dequeue()` method each time you want to process a new job.
 
 The important thing to note about the `dequeue()` is that it's a context
-manager that yields a `Job` object for you to work with. It does so by making
-three consecutive and independent SQL transactions:
+manager that needs to be used with a `with` or `await with` statement, just like
+any a call to `open()` or any other context manager. It yields a `Job` object
+for you to work with. If there is no job to process, it will yield `None`
+instead.
+
+The `dequeue()` method works by making three consecutive and independent SQL
+transactions:
 
 * **Transaction 1 (optional)**: Looks for jobs whose `max_age` is not null and
-whose `enqueued_at + max_age` is in the past and updates their status to
+whose `scheduled_at + max_age` is in the past and updates their status to
 `expired`.
 * **Transaction 2**: Selects the next job from the queue and sets its status
 to `claimed`, all in one go. It either succeeds in claiming the job or not.
@@ -258,7 +263,7 @@ The first two are most common. The job will be picked up if:
 1. Job status is `queued` (scheduled or rejected) or `failed`
   (failed to be processed and is being retried);
 1. And its `scheduled_at` time is in the past;
-1. And its `max_age` is not set or its `enqueued_at + max_age` is in the future.
+1. And its `max_age` is not set or its `scheduled_at + max_age` is in the future.
 
 The job in `claimed` state is a special case and happens when some worker
 marked the job as claimed but failed to process it. In this case the row,
