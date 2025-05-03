@@ -560,6 +560,13 @@ some data might not be ready yet. In such cases, you can set the
 
 ## Preparing your database
 
+Here are three ways to create the `jobs` table and the appropriate
+indexes in your database, which is all Raquel needs to work.
+
+* [Create the `jobs` table by calling a function](#create-the-jobs-table-by-calling-a-function)
+* [Create the `jobs` table using SQL](#create-the-jobs-table-using-sql)
+* [Create the `jobs` table using Alembic migrations](#create-the-jobs-table-using-alembic-migrations)
+
 ### Create the `jobs` table by calling a function
 
 You can configure the table using the `create_all()` method, which will
@@ -571,7 +578,7 @@ safe to run it multiple times, it only creates the table once.).
 rq.create_all()
 ```
 
-### Create the table using SQL
+### Create the `jobs` table using SQL
 
 Alternatively, you can create the table **manually**. For example, in
 **Postgres** you can use the following SQL:
@@ -602,7 +609,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_scheduled_at ON jobs (scheduled_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_claimed_by ON jobs (claimed_by);
 ```
 
-### Create the table using Alembic migrations
+### Create the `jobs` table using Alembic migrations
 
 Import Raquel's metadata and add it as a target inside the
 `context.configure()` calls in the `env.py` file:
@@ -642,12 +649,13 @@ appropriate indexes to your migration file.
 
 ## Fun facts
 
-* Raquel is named after the famous actress Raquel Welch, who I have never seen in a movie.
-  But her poster was one of the cutouts hanging in the shrine dedicated to
-  Arnold Schwarzenegger in the local gym I used to attend. Don't ask me why and how.
-* The name Raquel is also a combination of the words "queue" and "SQL".
+* Raquel is named after the famous actress Raquel Welch, who I have never
+  seen in a movie. But a poster with her picture was hanging in the shrine
+  dedicated to Arnold Schwarzenegger in the local gym I used to attend. Don't
+  ask me why and how.
+* The name Raquel is also a play on the words "queue" and "SQL".
 * The `payload` can be empty or Null (`None`). You can use it to schedule jobs
-  without any payload, for example, to send a notification or to run a periodic
+  without any payload. For example, to send a notification or to run a periodic
   task.
 
 ## Should I trust Raquel with my production?
