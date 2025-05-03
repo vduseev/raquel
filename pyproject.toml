@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "raquel"
-version = "0.2.7"
+version = "0.2.8"
 description = "Simple Job Queues using SQL"
 authors = ["vduseev <vagiz@duseev.com>"]
 license = "Apache-2.0"
@@ -9,7 +9,7 @@ keywords = ["job", "queue", "sql", "postgresql", "sqlite"]
 homepage = "https://github.com/vduseev/raquel"
 repository = "https://github.com/vduseev/raquel"
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
