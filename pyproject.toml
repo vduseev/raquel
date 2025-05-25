@@ -1,13 +1,19 @@
-[tool.poetry]
+[project]
 name = "raquel"
 version = "0.2.8"
 description = "Simple Job Queues using SQL"
-authors = ["vduseev <vagiz@duseev.com>"]
-license = "Apache-2.0"
+authors = [{ name = "vduseev", email = "vagiz@duseev.com" }]
+requires-python = "~=3.10"
 readme = "README.md"
-keywords = ["job", "queue", "sql", "postgresql", "sqlite"]
-homepage = "https://github.com/vduseev/raquel"
-repository = "https://github.com/vduseev/raquel"
+license = "Apache-2.0"
+keywords = [
+    "job",
+    "task",
+    "queue",
+    "sql",
+    "distributed",
+    "worker",
+]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
@@ -17,44 +23,45 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries",
     "Topic :: System :: Distributed Computing",
 ]
+dependencies = ["sqlalchemy~=2.0"]
 
-[tool.poetry.dependencies]
-python = "^3.10"
-sqlalchemy = "^2.0"
-greenlet = { version = "^3.1", optional = true }
+[project.optional-dependencies]
+asyncio = ["greenlet~=3.0"]
 
-[tool.poetry.extras]
-asyncio = ["greenlet"]
+[project.urls]
+Homepage = "https://github.com/vduseev/raquel"
+Repository = "https://github.com/vduseev/raquel"
 
-[tool.poetry.group.docs.dependencies]
-sphinx = "^8.0.2"
-sphinx-material = "^0.0.36"
-sphinxcontrib-programoutput = "^0.17"
+[dependency-groups]
+test = [
+    "pytest~=8.3",
+    "pytest-cov~=5.0",
+    "psycopg2-binary~=2.9",
+    "asyncpg~=0.30",
+    "pytest-asyncio~=0.24",
+]
+dev = [
+    "bump-my-version>=1.1.4",
+    "ruff~=0.9",
+]
 
-[tool.poetry.group.test.dependencies]
-pytest = "^8.3"
-pytest-cov = "^5.0"
-psycopg2 = "^2.9"
-asyncpg = "^0.30"
-mysql-connector-python = "^9.0"
-pymssql = "^2.3"
-oracledb = "^2.4"
-pytest-asyncio = "^0.24"
-
-[tool.poetry.group.dev.dependencies]
-ruff = "^0.9.4"
+[tool.uv]
+default-groups = [
+    "test",
+    "dev",
+]
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [tool.coverage.run]
 branch = true
 source = ["raquel"]
-omit = ["raquel/dbapi_types.py"]
 
 [tool.coverage.report]
 exclude_also = [
@@ -78,7 +85,6 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
-# Exclude a variety of commonly ignored directories.
 exclude = [
     ".bzr",
     ".direnv",
@@ -145,3 +151,20 @@ max-doc-length = 79
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.bumpversion]
+current_version = "0.2.8"
+parse = "(?P<major>\\d+)\\.(?P<minor>\\d+)\\.(?P<patch>\\d+)"
+serialize = ["{major}.{minor}.{patch}"]
+search = "{current_version}"
+replace = "{new_version}"
+regex = false
+ignore_missing_version = false
+tag = true
+sign_tags = false
+tag_name = "v{new_version}"
+tag_message = "Bump version: {current_version} → {new_version}"
+allow_dirty = false
+commit = true
+message = "Bump version: {current_version} → {new_version}"
+commit_args = ""

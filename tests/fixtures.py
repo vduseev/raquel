@@ -16,10 +16,10 @@ def rq_sqlite():
 
 
 @pytest.fixture
-def rq_psycopg2():
+def rq_psycopg2(postgres_dsn_sync):
     logging.getLogger("raquel").setLevel(logging.DEBUG)
 
-    instance = Raquel("postgresql+psycopg2://postgres:postgres@localhost:6432/postgres")
+    instance = Raquel(postgres_dsn_sync)
     try:
         instance.create_all()
         yield instance
@@ -28,10 +28,10 @@ def rq_psycopg2():
 
 
 @pytest_asyncio.fixture
-async def rq_asyncpg():
+async def rq_asyncpg(postgres_dsn_async):
     logging.getLogger("raquel").setLevel(logging.DEBUG)
 
-    instance = AsyncRaquel("postgresql+asyncpg://postgres:postgres@localhost:6432/postgres")
+    instance = AsyncRaquel(postgres_dsn_async)
     try:
         await instance.create_all()
         yield instance

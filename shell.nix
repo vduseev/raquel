@@ -4,7 +4,7 @@
 
 pkgs.mkShell {
   packages = [
-    pkgs.poetry
+    pkgs.uv
     pkgs.python313
     pkgs.postgresql
     pkgs.openssl
@@ -13,10 +13,9 @@ pkgs.mkShell {
   shellHook = ''
     # Create virtual environment if it doesn't exist
     if [ ! -d .venv ]; then
-      echo "Creating new Poetry environment..."
-      poetry config virtualenvs.in-project true
-      poetry env use ${pkgs.lib.getExe pkgs.python313}
-      poetry install --all-extras
+      echo "Creating new uv environment..."
+      uv venv --python ${pkgs.lib.getExe pkgs.python313}
+      uv sync
     fi
 
     # Activate virtual environment

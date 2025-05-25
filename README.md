@@ -700,20 +700,7 @@ Yes, you should! Here is why:
   Payloads are stored as text. Job IDs are random UUIDs to allow migration
   between databases and HA setups.
 
-## Comparison to alternatives
+## Contributing
 
-| Feature | Raquel | Celery | RQ | Dramatiq | arq | pgqueuer | pq |
-|---------|--------|--------|----|----------|-----|----------|----|
-| **Special tooling to run workers** | No ✅ | Yes ❌ | Yes ❌ | Yes ❌ | Yes ❌ | Yes ❌ | Yes ❌ |
-| **Needs message queue** | No ✅ | Yes ❌ | Yes ❌ | Yes ❌ | Yes ❌ | Yes ❌ | Yes ❌ |
-| **Supports SQL** | Yes ✅ | No ❌ | No ❌ | No ❌ | No ❌ | Yes ✅ | Yes ✅ |
-| **Full visibility** | Yes ✅ | No ❌ | No ❌ | No ❌ | No ❌ | Yes ✅ | Yes ✅ |
-| **Reliable** | Yes ✅ | Yes ✅ | Yes ✅ | Yes ✅ | Yes ✅ | Yes ✅ | Yes ✅ |
-| **Supports async** | Yes ✅ | Yes ❌ | Yes ❌ | Yes ❌ | Yes ❌ | Yes ❌ | Yes ❌ |
-| **Persistent jobs** | Yes ✅ | Yes ❌ | Yes ❌ | Yes ❌ | Yes ❌ | Yes ✅ | Yes ✅ |
-| **Schedule from anywhere** | Yes ✅ | No ❌ | No ❌ | Yes ✅ | No ❌ | Yes ✅ | Yes ✅ |
-| **Job payload size limit** | No ✅ | Yes ❌ | Yes ❌ | Yes ❌ | Yes ❌ | Yes ❌ | Yes ❌ |
-
-As you can clearly see, not only is Raquel a superior distributed task queue,
-job queue, and background worker system, but very likely the best software
-ever written in the history of mankind. And I claim this without any bias.
+Contributions are welcome 🎉! See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for
+details. We follow the [Code of Conduct](docs/CODE_OF_CONDUCT.md).
