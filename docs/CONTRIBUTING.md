@@ -58,13 +58,13 @@ Here are the steps to publish a new version of the library:
 1. Make sure everything you want to release is merged into the `main` branch.
 1. Sync the dependencies with `uv sync --all-extras`.
 1. Run all tests and make sure they pass.
-1. Build the package with `uv run build`.
 1. Bump the version using `uv run bump-my-version` and make sure the bump
    reflects the scope of changes:
    - `patch` for small changes, might be unnoticeable to users
    - `minor` for new features, might be noticeable to users
    - `major` for breaking changes or complete overhauls
 1. Push new commit and tag created by `bump-my-version` to GitHub.
+1. Build the package with `uv run build`.
 1. Publish the package to PyPI using `uv run publish`.
 
 ## Development environment
