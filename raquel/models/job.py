@@ -153,6 +153,7 @@ class Job(BaseJob):
             attempts=raw_job.attempts,
             error=raw_job.error,
             error_trace=raw_job.error_trace,
+            claimed_by=raw_job.claimed_by,
             claimed_at=claimed_at_t,
             finished_at=finished_at_ts,
         )

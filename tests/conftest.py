@@ -36,7 +36,7 @@ def pytest_addoption(parser):
 
 
 @pytest.fixture(scope="session")
-def postgres_config(request):
+def postgres_config(request) -> dict[str, str]:
     """Provide PostgreSQL connection configuration from command-line options."""
     return {
         "host": request.config.getoption("--postgres-host"),
@@ -48,7 +48,7 @@ def postgres_config(request):
 
 
 @pytest.fixture(scope="session")
-def postgres_dsn_sync(postgres_config):
+def postgres_dsn_sync(postgres_config) -> str:
     """Generate PostgreSQL DSN for synchronous connections (psycopg2)."""
     return (
         f"postgresql+psycopg2://{postgres_config['user']}:{postgres_config['password']}"
@@ -57,7 +57,7 @@ def postgres_dsn_sync(postgres_config):
 
 
 @pytest.fixture(scope="session")
-def postgres_dsn_async(postgres_config):
+def postgres_dsn_async(postgres_config) -> str:
     """Generate PostgreSQL DSN for asynchronous connections (asyncpg)."""
     return (
         f"postgresql+asyncpg://{postgres_config['user']}:{postgres_config['password']}"

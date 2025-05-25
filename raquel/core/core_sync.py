@@ -639,8 +639,6 @@ class Raquel(BaseRaquel):
             if p.queues:
                 where_clause = (RawJob.queue.in_(p.queues),) + where_clause
 
-            logger.debug(f"Where clause: {where_clause}")
-
             select_oldest_stmt = (
                 select(RawJob)
                 .where(*where_clause)
@@ -671,6 +669,7 @@ class Raquel(BaseRaquel):
             job.claimed_at = datetime.fromtimestamp(
                 p.before_ms / 1000, timezone.utc
             )
+            job.claimed_by = p.claim_as
             return job
 
     def unclaim(self, job_id: UUID) -> bool:
