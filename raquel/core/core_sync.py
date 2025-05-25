@@ -6,7 +6,16 @@ from threading import Event
 from uuid import UUID
 from typing import Any, Callable, ParamSpec, Iterable, Concatenate
 
-from sqlalchemy import event, case, create_engine, desc, select, update, Update
+from sqlalchemy import (
+    case,
+    create_engine,
+    desc,
+    select,
+    update,
+    and_,
+    or_,
+    Update,
+)
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 from sqlalchemy.engine.url import URL
@@ -34,6 +43,7 @@ class Subscription:
         expire: bool = True,
         sleep: int = 1000,
         raise_stop_on_unhandled_exc: bool = False,
+        reclaim_after: int = 60 * 1000,
     ) -> None:
         functools.update_wrapper(self, fn)
         self.fn = fn
@@ -43,6 +53,7 @@ class Subscription:
         self.expire = expire
         self.sleep = sleep
         self.raise_stop_on_unhandled_exc = raise_stop_on_unhandled_exc
+        self.reclaim_after = reclaim_after
 
         self.stop_event = Event()
 
@@ -60,6 +71,7 @@ class Subscription:
                     claim_as=self.claim_as,
                     expire=self.expire,
                     raise_stop_on_unhandled_exc=self.raise_stop_on_unhandled_exc,
+                    reclaim_after=self.reclaim_after,
                 ) as job:
                     if job:
                         self.fn(job, *args, **kwargs)
@@ -119,6 +131,7 @@ class DequeueContextManager:
         claim_as: str | None = None,
         expire: bool = True,
         raise_stop_on_unhandled_exc: bool = False,
+        reclaim_after: int = 60 * 1000,
     ) -> None:
         self.broker = broker
         self.queues = queues
@@ -126,6 +139,7 @@ class DequeueContextManager:
         self.claim_as = claim_as
         self.expire = expire
         self.raise_stop_on_unhandled_exc = raise_stop_on_unhandled_exc
+        self.reclaim_after = reclaim_after
 
         self.job: Job | None = None
         self.session: Session | None = None
@@ -142,6 +156,7 @@ class DequeueContextManager:
             *self.queues,
             before=self.before,
             claim_as=self.claim_as,
+            reclaim_after=self.reclaim_after,
         )
 
         if not self.job:
@@ -437,6 +452,7 @@ class Raquel(BaseRaquel):
         expire: bool = True,
         sleep: int = 1000,
         raise_stop_on_unhandled_exc: bool = False,
+        reclaim_after: int = 60 * 1000,
     ) -> Callable[[Callable[Concatenate[Job, P], None]], Subscription]:
         """Decorate a function to subscribe to one or more queues and process
         jobs as they arrive.
@@ -481,6 +497,11 @@ class Raquel(BaseRaquel):
             raise_stop_on_unhandled_exc (bool): Raise a ``StopSubscription``
                 exception if an unhandled exception occurs while processing
                 the job. Defaults to False.
+            reclaim_after (int): Optional parameter to specify the
+                reclaim delay in milliseconds. If a job was claimed but
+                wasn't processed and the row remains unlocked, then it can
+                be reclaimed after this delay. The delay is calculated from
+                the previous ``claimed_at`` time. Defaults to 1 minute.
         """
 
         def decorator(fn: Callable[Concatenate[Job, P], None]) -> Subscription:
@@ -492,6 +513,7 @@ class Raquel(BaseRaquel):
                 expire=expire,
                 sleep=sleep,
                 raise_stop_on_unhandled_exc=raise_stop_on_unhandled_exc,
+                reclaim_after=reclaim_after,
             )
             self.subscriptions.append(subscription)
             return subscription
@@ -505,6 +527,7 @@ class Raquel(BaseRaquel):
         claim_as: str | None = None,
         expire: bool = True,
         raise_stop_on_unhandled_exc: bool = False,
+        reclaim_after: int = 60 * 1000,
     ) -> DequeueContextManager:
         """Take the oldest job and process it inside a context manager.
 
@@ -542,6 +565,11 @@ class Raquel(BaseRaquel):
             raise_stop_on_unhandled_exc (bool): Raise a ``StopSubscription``
                 exception if an unhandled exception occurs while processing
                 the job. Defaults to False.
+            reclaim_after (int): Optional parameter to specify the
+                reclaim delay in milliseconds. If a job was claimed but
+                wasn't processed and the row remains unlocked, then it can
+                be reclaimed after this delay. The delay is calculated from
+                the previous ``claimed_at`` time. Defaults to 1 minute.
 
         Yields:
             (Job | None): The oldest job in the queue or None if no job is available.
@@ -553,6 +581,7 @@ class Raquel(BaseRaquel):
             claim_as=claim_as,
             expire=expire,
             raise_stop_on_unhandled_exc=raise_stop_on_unhandled_exc,
+            reclaim_after=reclaim_after,
         )
 
     def claim(
@@ -560,6 +589,7 @@ class Raquel(BaseRaquel):
         *queues: str,
         before: datetime | int | None = None,
         claim_as: str | None = None,
+        reclaim_after: int = 60 * 1000,
     ) -> Job | None:
         """Claim the oldest job in the queue and lock it for processing.
 
@@ -578,6 +608,11 @@ class Raquel(BaseRaquel):
                 this time. Defaults to now (UTC).
             claim_as (str):  Optional parameter to identify whoever
                 is locking the job. Defaults to None.
+            reclaim_after (int | None): Optional parameter to specify the
+                reclaim delay in milliseconds. If a job was claimed but
+                wasn't processed and the row remains unlocked, then it can
+                be reclaimed after this delay. The delay is calculated from
+                the previous ``claimed_at`` time. Defaults to 1 minute.
 
         Returns:
             (Job | None): The acquired job or None if no job is available.
@@ -585,13 +620,21 @@ class Raquel(BaseRaquel):
         p = common.parse_claim_params(
             *queues, before=before, claim_as=claim_as
         )
+        # Retrieve the earliest scheduled job in the queue and lock the row.
         with Session(self.engine) as session:
-            # Retrieve the earliest scheduled job in the queue and lock the row.
             where_clause = (
-                RawJob.status.in_([self.QUEUED, self.FAILED]),
+                or_(
+                    RawJob.status.in_([self.QUEUED, self.FAILED]),
+                    and_(
+                        RawJob.status == self.CLAIMED,
+                        RawJob.claimed_at + reclaim_after <= p.now_ms,
+                    ),
+                ),
                 RawJob.scheduled_at <= p.before_ms,
-                RawJob.max_age.is_(None)
-                | (RawJob.enqueued_at + RawJob.max_age >= p.now_ms),
+                or_(
+                    RawJob.max_age.is_(None),
+                    RawJob.enqueued_at + RawJob.max_age >= p.now_ms,
+                ),
             )
             if p.queues:
                 where_clause = (RawJob.queue.in_(p.queues),) + where_clause
@@ -614,7 +657,7 @@ class Raquel(BaseRaquel):
                 .where(RawJob.id == raw_job.id)
                 .values(
                     status=self.CLAIMED,
-                    claimed_at=p.before_ms,
+                    claimed_at=p.now_ms,
                     claimed_by=p.claim_as,
                 )
             )
@@ -626,6 +669,7 @@ class Raquel(BaseRaquel):
             job.claimed_at = datetime.fromtimestamp(
                 p.before_ms / 1000, timezone.utc
             )
+            job.claimed_by = p.claim_as
             return job
 
     def unclaim(self, job_id: UUID) -> bool:
