@@ -1,8 +1,8 @@
 # raquel
 
 <p>
-    <a href="https://pypi.org/pypi/raquel"><img alt="Package version" src="https://img.shields.io/pypi/v/raquel?logo=python&logoColor=white&color=blue"></a>
-    <a href="https://pypi.org/pypi/raquel"><img alt="Supported python versions" src="https://img.shields.io/pypi/pyversions/raquel?logo=python&logoColor=white"></a>
+  <a href="https://pypi.org/pypi/raquel"><img alt="Package version" src="https://img.shields.io/pypi/v/raquel?logo=python&logoColor=white&color=blue"></a>
+  <a href="https://pypi.org/pypi/raquel"><img alt="Supported python versions" src="https://img.shields.io/pypi/pyversions/raquel?logo=python&logoColor=white"></a>
 </p>
 
 *Simple and elegant Job Queues for Python using SQL.*
@@ -20,6 +20,35 @@ Raquel is a perfect solution for a distributed task queue and background workers
 * **Transparent**: Full visibility into which jobs are running, which failed
   and why, which are pending, etc. Query anything using SQL.
 
+Table of contents
+
+* [Installation](#installation)
+* [Usage](#usage)
+  * [Schedule jobs](#schedule-jobs)
+    * [Using enqueue()](#using-enqueue)
+    * [Using SQL insert](#using-sql-insert)
+  * [Pick up jobs](#pick-up-jobs)
+    * [Using dequeue()](#using-dequeue)
+  * [Failed jobs](#failed-jobs)
+  * [Reschedule jobs](#reschedule-jobs)
+  * [Reject jobs](#reject-jobs)
+  * [Async support](#async-support)
+  * [Stats](#stats)
+* [How it works](#how-it-works)
+  * [Jobs table](#jobs-table)
+  * [Job status](#job-status)
+  * [One job per worker](#one-job-per-worker)
+  * [Database transactions](#database-transactions)
+  * [Sudden shutdown](#sudden-shutdown)
+  * [Retry delay](#retry-delay)
+* [Create jobs table](#create-jobs-table)
+  * [Using create_all()](#using-create_all)
+  * [Using SQL create table](#using-sql-create-table)
+  * [Using Alembic migrations](#using-alembic-migrations)
+* [Production ready](#production-ready)
+* [Fun facts](#fun-facts)
+* [Contribute](#contribute)
+
 ## Installation
 
 ```bash
@@ -33,52 +62,43 @@ adds the `greenlet` package as a dependency.
 pip install raquel[asyncio]
 ```
 
-## Scheduling jobs
+## Usage
 
-In Raquel, jobs are scheduled using the `enqueue()` method. By default, the
-job is scheduled for immediate execution. But you can also schedule the job
-for a specific time in the future or past using the `at` parameter.
+### Schedule jobs
 
-Use the `delay` parameter to schedule the job to run after a certain amount of
-time in addition to the `at` time (yes, you use either or both). The workers
-won't pick up the job until the scheduled time is reached.
+In order for the job to be scheduled it needs to be added to the `jobs` table
+in the database. As long as it has the right status and timestamp, it will be
+picked up by the workers.
 
-Payload can be any JSON-serializable object or simply a string. It can even
-be empty. In database, the payload is stored as text for maximum compatibility
-with all SQL databases, so anything that can be serialized to text can be used
-as a payload.
+Jobs can be scheduled using the library or by inserting a row into the `jobs`
+table directly.
 
-If you omit the queue name, the job will be placed into the `"default"` queue.
-Use the `queue` name to place jobs into different queues.
+#### Using enqueue()
+
+The easiest way to schedule a job is using the `enqueue()` method. By default,
+the job is scheduled for immediate execution.
 
 ```python
 from raquel import Raquel
 
-# Raquel uses SQLAlchemy to connect to most SQL databases
+# Raquel uses SQLAlchemy to connect to most SQL databases. You can pass
+# a connection string or a SQLAlchemy engine.
 rq = Raquel("postgresql+psycopg2://postgres:postgres@localhost/postgres")
+
 # Enqueing a job is as simple as this
 rq.enqueue(queue="messages", payload="Hello, World!")
 rq.enqueue(queue="tasks", payload={"data": [1, 2]})
 ```
 
-ℹ️ Everything in Raquel is designed to work with both sync and async code.
-You can use the `AsyncRaquel` class to enqueue and dequeue jobs in an async
-manner.
+Payload can be any JSON-serializable object or simply a string. It can even
+be empty. In database, the payload is stored as UTF-8 encoded text for
+maximum compatibility with all SQL databases, so anything that can be
+serialized to text can be used as a payload.
 
-*Just don't forget the `asyncio` extra when installing the package:*
-`raquel[asyncio]`.
+By default, jobs end up in the `"default"` queue. Use the `queue` parameter
+to place jobs into different queues.
 
-```python
-import asyncio
-from raquel import AsyncRaquel
-
-rq = AsyncRaquel("postgresql+asyncpg://postgres:postgres@localhost/postgres")
-
-async def main():
-    await rq.enqueue("default", {'my': {'name_is': 'Slim Shady'}})
-
-asyncio.run(main())
-```
+#### Using SQL insert
 
 We can also schedule jobs using plain SQL by simply inserting a row into the
 `jobs` table. For example, in PostgreSQL:
@@ -93,125 +113,268 @@ VALUES
     (uuid_generate_v4(), 'my-jobs', 'queued', 'Is this the real life?');
 ```
 
-## Picking up jobs
+### Pick up jobs
 
-Jobs can be picked up from the queues in two main ways.
+While you can manually claim, process, and update the job, you'd also need to
+handle exceptions, retries and other edge cases. The library provides
+convenient ways to do this.
 
-* [The `subscribe()` decorator](#the-subscribe-decorator)
-* [The `dequeue()` context manager](#the-dequeue-context-manager)
+#### Using dequeue()
 
-### The `subscribe()` decorator
-
-Decorates a function to subscribe to certain queues. This is the simplest
-approach, because it handles everything for you.
-
-This approach is recommended for most use cases. It works exactly like the
-`dequeue()` context manager described next, because it's essentially
-a while-loop wrapper around it.
-
-The `subscribe()` approach will run an infinite loop for you, picking up jobs
-from the queues as they arrive.
-
-#### Subscribe to queues
-
-```python
-from raquel import Raquel, Job
-
-rq = Raquel("postgresql+psycopg2://postgres:postgres@localhost/postgres")
-
-@rq.subscribe("messages", "tasks")
-def worker(job: Job):
-    do_work(job.payload)
-
-# This loop will run forever, picking up jobs from the "messages" and "tasks"
-# queues every second as their scheduled time approaches.
-worker.run()
-```
-
-In async mode, the `subscribe()` decorator works the same way:
-
-```python
-import asyncio
-from raquel import AsyncRaquel, Job
-
-rq = AsyncRaquel("postgresql+asyncpg://postgres:postgres@localhost/postgres")
-
-@rq.subscribe("messages", "tasks")
-async def worker(job: Job):
-    await do_work(job.payload)
-
-asyncio.run(worker.run())
-```
-
-#### Stop the subscription
-
-You can stop the subscription by raising the `StopSubscription` exception
-from within the decorated function:
-
-```python
-import itertools
-counter = itertools.count()
-
-@rq.subscribe("tasks")
-def worker(job: Job):
-    do_work(job.payload)
-
-    # Stop the subscription after the first 10 jobs are processed
-    if next(counter) > 10:
-        raise StopSubscription
-```
-
-### The `dequeue()` context manager
-
-This is what does 99% of work behind the `subscribe()` decorator. Using
-it directly offers a bit more flexibility but you have to make a call to the
-`dequeue()` method each time you want to process a new job.
-
-The important thing to note about the `dequeue()` is that it's a context
-manager that needs to be used with a `with` or `await with` statement, just like
-any a call to `open()` or any other context manager. It yields a `Job` object
-for you to work with. If there is no job to process, it will yield `None`
-instead.
-
-The `dequeue()` method works by making three consecutive and independent SQL
-transactions:
-
-* **Transaction 1 (optional)**: Looks for jobs whose `max_age` is not null and
-whose `scheduled_at + max_age` is in the past and updates their status to
-`expired`.
-* **Transaction 2**: Selects the next job from the queue and sets its status
-to `claimed`, all in one go. It either succeeds in claiming the job or not.
-* **Transaction 3**: Places a database lock on that "claimed" row with the
-job details for the entire duration of the processing and then updates the
-job with an appropriate status value:
-
-  * `success` if the job is processed successfully and we are done with it.
-  * `failed` if an exception was caught by the context manager or the job was
-    manually marked as failed. The job will be rescheduled for a retry.
-  * `queued` if the job was manually rejected or manually rescheduled for a
-    later time.
-  * `cancelled` if the job is manually cancelled.
-  * `exhausted` if the job has reached the maximum number of retries.
-
-All of that happens inside the context manager itself.
+The `dequeue()` method is a context manager that yields a `Job` object for you
+to work with. If there is no job to process, it will yield `None` instead.
 
 ```python
 while True:
-    # dequeue() is a context manager that yields a job object. It will
-    # handle the job status and exceptions for you.
     with rq.dequeue("tasks") as job:
-        if not job:
-            time.sleep(1)
-            continue
+        if job:
+            do_work(job.payload)
+        else:
+          time.sleep(1)
+```
+
+The `dequeue()` will find the next job and claim it. It will also handle
+the job status, exceptions, retries and everything else automatically.
+
+### Failed jobs
+
+Jobs are retried when they fail. When an exception is caught by the
+`dequeue()` context manager, the job is rescheduled with an exponential
+backoff delay.
+
+By default, the job will be retried indefinitely. You can set the
+`max_retry_count` or `max_age` fields to limit the number of retries or the
+maximum age of the job.
+
+```python
+with rq.dequeue("my-queue") as job:
+    # Let the context manager handle the exception for you.
+    # The exception will be caught and the job will be retried.
+    # Under the hood, context manager will call `job.fail()` for you.
+    raise Exception("Oh no")
+    do_work(job.payload)
+```
+
+You can always handle the exception manually:
+
+```python
+with rq.dequeue("my-queue") as job:
+    # Catch an exception manually
+    try:
+        do_work(job.payload)
+    except Exception as e:
+        # If you mark the job as failed, it will be retried.
+        job.fail(str(e))
+```
+
+Whenever job fails, the error and the traceback are stored in the `error` and
+`error_trace` columns. The job status is set to `failed` and the job will
+be retried. The attempt number is incremented.
+
+### Reschedule jobs
+
+The `reschedule()` method is used to reprocess the job at a later time.
+The job will remain in the queue with a new scheduled execution time, and the
+current attempt won't count towards the maximum number of retries.
+
+This method should only be called inside the `dequeue()` context manager.
+
+```python
+with rq.dequeue("my-queue") as job:
+    # Check if we have everything ready to process the job, and if not,
+    # reschedule the job to run 10 minutes from now
+    if not is_everything_ready_to_process(job.payload):
+        job.reschedule(delay=timedelta(minutes=10))
+    else:
+        # Otherwise, process the job
         do_work(job.payload)
 ```
 
-## The `jobs` table
+When you reschedule a job, its `scheduled_at` field is either updated with
+the new `at` and `delay` values or left unchanged. And the `finished_at` field
+is cleared. If the `Job` object had any `error` or `error_trace` values, they
+are saved to the database. The `attempts` field is incremented.
+
+Here are some fancy ways to reschedule a job using `reschedule()`:
+
+```python
+# Run when the next day starts
+with rq.dequeue("my-queue") as job:
+    job.reschedule(
+        at=datetime.now().replace(
+            hour=0, minute=0, second=0, microsecond=0,
+        ) + timedelta(days=1)
+    )
+
+# Same but using the `delay` parameter
+with rq.dequeue("my-queue") as job:
+    job.reschedule(
+        at=datetime.now().replace(hour=0, minute=0, second=0, microsecond=0),
+        delta=timedelta(days=1),
+    )
+
+# Run in 500 milliseconds
+with rq.dequeue("my-queue") as job:
+    job.reschedule(delay=500)
+
+# Run in `min_retry_delay` milliseconds, as configured for this job
+# (default is 1 second)
+with rq.dequeue("my-queue") as job:
+    job.reschedule()
+```
+
+### Reject jobs
+
+In case your worker can't process the job for some reason, you can reject it,
+allowing it to be immediately claimed by another worker.
+
+This method should only be called inside the `dequeue()` context manager.
+
+It is very similar to rescheduling the job to run immediately. When you reject
+the job, the `scheduled_at` field is left unchanged, but the `claimed_at` and
+`claimed_by` fields are cleared. The job status is set to `queued`. And the
+`attempts` field is incremented.
+
+```python
+with rq.dequeue("my-queue") as job:
+    if job.payload.get("requires_admin"):
+        # Reject the job if the worker can't process it.
+        job.reject()
+    else:
+        # Otherwise, process the job
+        do_work(job.payload)
+```
+
+### Async support
+
+Everything in Raquel is designed to work with both sync and async code.
+You can use the `AsyncRaquel` class to enqueue and dequeue jobs in an async
+manner.
+
+*Just don't forget the `asyncio` extra when installing the package:*
+`raquel[asyncio]`.
+
+```python
+import asyncio
+from raquel import AsyncRaquel
+
+rq = AsyncRaquel("postgresql+asyncpg://postgres:postgres@localhost/postgres")
+
+async def main():
+    await rq.enqueue("tasks", {'my': {'name_is': 'Slim Shady'}})
+
+asyncio.run(main())
+```
+
+In async mode, the `dequeue()` context manager works the same way:
+
+```python
+async def main():
+    async with rq.dequeue("tasks") as job:
+        if job:
+            await do_work(job.payload)
+        else:
+            await asyncio.sleep(1)
+
+asyncio.run(main())
+```
+
+### Stats
+
+* List of queues
+
+  ```python
+  >>> rq.queues()
+  ['default', 'tasks']
+  ```
+
+  ```sql
+  SELECT queue FROM jobs GROUP BY queue
+  ```
+
+* Number of jobs per queue
+
+  ```python
+  >>> rq.count("default")
+  10
+  ```
+
+  ```sql
+  SELECT queue, COUNT(*) FROM jobs WHERE queue = 'default' GROUP BY queue
+  ```
+
+* Number of jobs per status
+
+  ```python
+  >>> rq.stats()
+  {'default': QueueStats(name='default', total=10, queued=10, claimed=0, success=0, failed=0, expired=0, exhausted=0, cancelled=0)}
+  ```
+
+  ```sql
+  SELECT queue, status, COUNT(*) FROM jobs GROUP BY queue, status
+  ```
+
+* Failed jobs
+
+  Note that the `failed` jobs are still going to be picked up and reprocessed
+  until they are marked as `success`, `exhausted`, `expired`, or `cancelled`.
+
+  ```python
+  >>> rq.count("default", rq.FAILED)
+  5
+  ```
+
+  ```sql
+  SELECT * FROM jobs WHERE queue = 'default' AND status = 'failed'
+  ```
+
+* Pending jobs, ready to be picked up by a worker
+
+  ```python
+  >>> rq.count("default", [rq.QUEUED, rq.FAILED])
+  5
+  ```
+
+  ```sql
+  SELECT * FROM jobs WHERE queue = 'default' AND status IN ('queued', 'failed')
+  ```
+
+* Claimed jobs that are currently being processed by a worker
+
+  ```python
+  >>> rq.count("default", rq.CLAIMED)
+  5
+  ```
+
+  ```sql
+  SELECT * FROM jobs WHERE queue = 'default' AND status = 'claimed'
+  ```
+
+* Rescheduled jobs
+
+  You can find all rescheduled jobs using SQL by filtering for those that are
+  queued, but have attempts and were claimed before.
+
+  ```sql
+  SELECT * FROM jobs
+  WHERE status = 'queued' AND attempts > 0 AND claimed_at IS NOT NULL
+  ```
+
+* Rejected jobs
+
+  ```sql
+  SELECT * FROM jobs
+  WHERE status = 'queued' AND attempts > 0 AND claimed_at IS NULL
+  ```
+
+## How it works
+
+### Jobs table
 
 Raquel uses **a single database table** called `jobs`.
 This is all it needs. Can you believe it?
 
-Here is what this table consists of:
+Here is the schema of the `jobs` table:
 
 | Column | Type | Description | Default | Nullable |
 |--------|------|-------------|-------------|--------|
@@ -233,7 +396,10 @@ Here is what this table consists of:
 | claimed_at | BIGINT | Time when the job was claimed in milliseconds since epoch (UTC). | Null | Yes |
 | finished_at | BIGINT | Time when the job was finished in milliseconds since epoch (UTC). | Null | Yes |
 
-## Job status
+Check out all ways to create the `jobs` table in the
+[Create jobs table](#create-jobs-table) section.
+
+### Job status
 
 ![Job status](https://raw.githubusercontent.com/vduseev/raquel/master/docs/job_status.png)
 
@@ -272,7 +438,9 @@ passed since the job was claimed (`claimed_at + 1 minute`) and the row is
 not locked (meaning the worker that claimed it is dead), any worker can
 reclaim it for itself.
 
-## How do we guarantee that the same job is not picked up by multiple workers?
+### One job per worker
+
+How do we guarantee that the same job is not picked up by multiple workers?
 
 Short answer: by locking the row and using the `claimed` status.
 
@@ -286,232 +454,42 @@ In extremely simple databases, such as SQLite, the fact that the whole
 database is locked during a write operation guarantees that no other worker
 will be able to set the job status to `claimed` at the same time.
 
-## What happens if a worker dies?
+### Database transactions
 
-* If a worker dies while attempting to claim a job, the transaction opened by
-  the worker is rolled back and the row is unlocked by the database. Another
-  worker can claim it and process it.
-* If a worker dies while processing a job, the row is unlocked by the database
-  but remains in the `claimed` status. Another worker can pick it up and
-  process it.
+The `dequeue()` context manager works by making three consecutive and
+independent SQL transactions:
 
-## Fancy ways to schedule jobs
+* **Transaction 1: Expire old jobs**: Looks for jobs whose `max_age` is not
+  null and whose `scheduled_at + max_age` is in the past and updates their
+  status to `expired`.
+* **Transaction 2: Claim a job**: Selects the next job from the queue and
+  sets its status to `claimed`, all in one go. It either succeeds in claiming
+  the job or not.
+* **Transaction 3: Process a job**: Places a database lock on that "claimed"
+  row with the job details for the entire duration of the processing and then
+  updates the job with an appropriate status value:
 
-All jobs are scheduled to run at a specific time. By default, this time is
-set to the current time when the job is enqueued. You can set the
-`scheduled_at` field to a future time to schedule the job to run at that time.
+  * `success` if the job is processed successfully and we are done with it.
+  * `failed` if an exception was caught by the context manager or the job was
+    manually marked as failed. The job will be rescheduled for a retry.
+  * `queued` if the job was manually rejected or manually rescheduled for a
+    later time.
+  * `cancelled` if the job is manually cancelled.
+  * `exhausted` if the job has reached the maximum number of retries.
 
-```python
-rq.enqueue("my-jobs", 10_000, at=datetime.now() + timedelta(hours=10))
-```
+All of that happens inside the context manager itself.
 
-But you can also specify a delay to schedule the job to run in the future:
+### Sudden shutdown
 
-```python
-# Same as above
-rq.enqueue("my-jobs", 10_000, delay=timedelta(hours=10))
-```
+If a worker dies while attempting to claim a job, the transaction opened by
+the worker is rolled back and the row is unlocked by the database. Another
+worker can claim it and process it.
 
-When enqueuing a job, you can specify all the parameters that are available
-in the `jobs` table. For example:
+If a worker dies while processing a job, the row is unlocked by the database
+but remains in the `claimed` status. Another worker can pick it up and
+process it.
 
-* `max_age` - Maximum age of the job in milliseconds.
-* `max_retry_count` - Maximum allowed number of retries.
-* `min_retry_delay` - Minimum delay between retries in milliseconds.
-* `max_retry_delay` - Maximum delay between retries in milliseconds.
-* `backoff_base` - Base in milliseconds for exponential retry backoff.
-
-## Reschedule a job
-
-The `reschedule()` method is used to reprocess the job at a later time.
-The job will remain in the queue with a new scheduled execution time, and the
-current attempt won't count towards the maximum number of retries.
-
-This method should only be called inside the `dequeue()` context manager or
-the `subscribe()` decorator.
-
-```python
-@rq.subscribe("my-queue")
-def worker(job: Job):
-    # Check if we have everything ready to process the job, and if not,
-    # reschedule the job to run 10 minutes from now
-    if not is_everything_ready_to_process(job.payload):
-        job.reschedule(delay=timedelta(minutes=10))
-    else:
-        # Otherwise, process the job
-        do_work(job.payload)
-```
-
-When you reschedule a job, its `scheduled_at` field is either updated with
-the new `at` and `delay` values or left unchanged. And the `finished_at` field
-is cleared. If the `Job` object had any `error` or `error_trace` values, they
-are saved to the database. The `attempts` field is incremented.
-
-You can find all rescheduled jobs using SQL by filtering for those that are
-queued, but have attempts and were claimed before.
-
-```sql
-SELECT * FROM jobs
-WHERE status = 'queued'
-AND attempts > 0
-AND claimed_at IS NOT NULL
-```
-
-Here are some fancy ways to reschedule a job using the same `reschedule()`
-method:
-
-ℹ️ *Make sure to call `reschedule()` inside the `dequeue()` context manager
-or the `subscribe()` decorator.*
-
-```python
-# Run when the next day starts
-job.reschedule(
-    at=datetime.now().replace(
-        hour=0, minute=0, second=0, microsecond=0,
-    ) + timedelta(days=1)
-)
-
-# Same but using the `delay` parameter
-job.reschedule(
-    at=datetime.now().replace(hour=0, minute=0, second=0, microsecond=0),
-    delta=timedelta(days=1),
-)
-
-# Run in 500 milliseconds
-job.reschedule(delay=500)
-
-# Run in `min_retry_delay` milliseconds, as configured for this job
-# (default is 1 second)
-job.reschedule()
-```
-
-## Reject the job
-
-In case your worker can't process the job for some reason, you can reject it,
-allowing it to be immediately claimed by another worker.
-
-This method should only be called inside the `dequeue()` context manager or
-the `subscribe()` decorator.
-
-It is very similar to rescheduling the job to run immediately. When you reject
-the job, the `scheduled_at` field is left unchanged, but the `claimed_at` and
-`claimed_by` fields are cleared. The job status is set to `queued`. And the
-`attempts` field is incremented.
-
-```python
-@rq.subscribe("my-queue")
-def worker(job: Job):
-    # Maybe this worker doesn't have the necessary permissions to process
-    # this job.
-    if job.payload.get("requires_admin"):
-        job.reject()
-        return
-
-    # Otherwise, process the job
-    do_work(job.payload)
-```
-
-Here is how you can find all rejected jobs using SQL:
-
-```sql
-SELECT * FROM jobs
-WHERE status = 'queued'
-AND attempts > 0
-AND claimed_at IS NULL
-```
-
-## Queue names
-
-By default, all jobs are placed into the `"default"` queue. You can specify
-the queue name when enqueuing a job:
-
-```python
-# Enqueue a payload into the "default" queue
-rq.enqueue(payload="Hello, World!")
-
-# Same as above
-rq.enqueue("default", "Hello, World!")
-
-# Enqueue a payload into the "my-queue" queue
-rq.enqueue("my-queue", "Hello, World!")
-```
-
-By default, when jobs are dequeued by a worker, the job that has the earliest
-`scheduled_at` time is picked up from any queue. If you want to dequeue jobs
-from specific queues, you can specify the queue names as arguments to the
-`subscribe()` decorator or the `dequeue()` context manager:
-
-```python
-# Just one job will be picked up from any of the queues.
-with rq.dequeue("my-queue", "another-queue", "as-many-as-you-want"):
-    do_work(job.payload)
-
-# Continuously picks up jobs from any of the specified queues.
-@rq.subscribe("my-queue", "another-queue", "as-many-as-you-want")
-def worker(job: Job):
-    do_work(job.payload)
-
-worker.run()
-```
-
-Here is how you can find all jobs from a specific queue using SQL:
-
-```sql
-SELECT * FROM jobs
-WHERE queue = 'my-queue'
-```
-
-And this query can show number of jobs per queue:
-
-```sql
-SELECT queue, COUNT(*) FROM jobs
-GROUP BY queue
-```
-
-## Job retries
-
-Jobs are retried when they fail. When an exception is caught by the `dequeue()`
-context manager, the job is rescheduled with an exponential backoff delay.
-The same logic applies within the `subscribe()` decorator.
-
-By default, the job will be retried indefinitely. You can set the `max_retry_count`
-or `max_age` fields to limit the number of retries or the maximum age of the job.
-
-```python
-@rq.subscribe()
-def worker(job: Job):
-    # Let the context manager handle the exception for you.
-    # The exception will be caught and the job will be retried.
-    # Under the hood, context manager will call `job.fail()` for you.
-    raise Exception("Oh no")
-    do_work(job.payload)
-```
-
-You can always handle the exception manually:
-
-```python
-@rq.subscribe()
-def worker(job: Job):
-    # Catch an exception manually
-    try:
-        do_work(job.payload)
-    except Exception as e:
-        # If you mark the job as failed, it will be retried.
-        job.fail(str(e))
-```
-
-Whenever job fails, the error and the traceback are stored in the `error` and
-`error_trace` columns. The job status is set to `failed` and the job will
-be retried. The attempt number is incremented.
-
-Here is how you can find all failed jobs using SQL:
-
-```sql
-SELECT * FROM jobs
-WHERE status = 'failed'
-```
-
-## Retry delay
+### Retry delay
 
 The next retry time after a failed job is calculated as follows:
 
@@ -554,20 +532,13 @@ retrying. For example, an API might have a rate limit you've just hit or
 some data might not be ready yet. In such cases, you can set the
 `min_retry_delay` to a higher value, such as 10 or 30 seconds.
 
-ℹ️ Remember, that all durations and timestamps are in milliseconds. So
-10 seconds is `10 * 1000 = 10000` milliseconds. 1 minute is
-`60 * 1000 = 60000` milliseconds.
+All durations and timestamps are in milliseconds. So 10 seconds is
+`10 * 1000 = 10000` milliseconds. 1 minute is `60 * 1000 = 60000`
+milliseconds.
 
-## Preparing your database
+## Create jobs table
 
-Here are three ways to create the `jobs` table and the appropriate
-indexes in your database, which is all Raquel needs to work.
-
-* [Create the `jobs` table by calling a function](#create-the-jobs-table-by-calling-a-function)
-* [Create the `jobs` table using SQL](#create-the-jobs-table-using-sql)
-* [Create the `jobs` table using Alembic migrations](#create-the-jobs-table-using-alembic-migrations)
-
-### Create the `jobs` table by calling a function
+### Using create_all()
 
 You can configure the table using the `create_all()` method, which will
 automatically use the supported syntax for the database you are using (it is
@@ -578,45 +549,24 @@ safe to run it multiple times, it only creates the table once.).
 rq.create_all()
 ```
 
-### Create the `jobs` table using SQL
+### Using SQL create table
 
-Alternatively, you can create the table **manually**. For example, in
-**Postgres** you can use the following SQL:
+Alternatively, the `jobs` table can be created **manually** using SQL.
+For **Postgres** you can use
+[this example](examples/create_jobs_table/create_table_postgres.sql).
 
-```sql
-CREATE TABLE IF NOT EXISTS jobs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    queue TEXT NOT NULL,
-    payload TEXT,
-    status TEXT NOT NULL DEFAULT 'queued',
-    max_age BIGINT,
-    max_retry_count INTEGER,
-    min_retry_delay INTEGER DEFAULT 1000,
-    max_retry_delay INTEGER DEFAULT 43200000,
-    backoff_base INTEGER DEFAULT 1000,
-    enqueued_at BIGINT NOT NULL DEFAULT extract(epoch from now()) * 1000,
-    scheduled_at BIGINT NOT NULL DEFAULT extract(epoch from now()) * 1000,
-    attempts INTEGER NOT NULL DEFAULT 0,
-    error TEXT,
-    error_trace TEXT,
-    claimed_by TEXT,
-    claimed_at BIGINT,
-    finished_at BIGINT
-);
-CREATE INDEX IF NOT EXISTS idx_jobs_queue ON jobs (queue);
-CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs (status);
-CREATE INDEX IF NOT EXISTS idx_jobs_scheduled_at ON jobs (scheduled_at);
-CREATE INDEX IF NOT EXISTS idx_jobs_claimed_by ON jobs (claimed_by);
-```
+### Using Alembic migrations
 
-### Create the `jobs` table using Alembic migrations
+#### Autogenerate migration
 
-Import Raquel's metadata and add it as a target inside the
-`context.configure()` calls in the `env.py` file:
+If you are using Alembic, the only thing you need to do is to import
+Raquel's metadata object and add it as a target inside the
+`context.configure()` calls in Alembic's `env.py` file.
 
 ```python
 # Alembic's env.py configuration file
 
+# Import Raquel's base metadata object
 from raquel.models.base_sql import BaseSQL as RaquelBaseSQL
 
 # This code already exists in the Alembic configuration file
@@ -626,7 +576,8 @@ def run_migrations_offline() -> None:
         # ...
         target_metadata=[
             target_metadata,
-            RaquelBaseSQL.metadata,  # <- Add Raquel's metadata
+            # Add Raquel's metadata
+            RaquelBaseSQL.metadata,
         ],
         # ...
     )
@@ -638,69 +589,86 @@ def run_migrations_online() -> None:
         # ...
         target_metadata=[
             target_metadata,
-            RaquelBaseSQL.metadata,  # <- Add Raquel's metadata
+            # Add Raquel's metadata
+            RaquelBaseSQL.metadata,
         ],
         # ...
     )
 ```
 
-Once you do that, Alembic will automatically add the `jobs` table and the
-appropriate indexes to your migration file.
+You only need to do this once. The first time you auto-generate a migration
+after that, Alembic will automatically create a proper migration for you.
 
-## Fun facts
+```shell
+alembic revision --autogenerate -m "raquel"
+```
 
-* Raquel is named after the famous actress Raquel Welch, who I have never
-  seen in a movie. But a poster with her picture was hanging in the shrine
-  dedicated to Arnold Schwarzenegger in the local gym I used to attend. Don't
-  ask me why and how.
-* The name Raquel is also a play on the words "queue" and "SQL".
-* The `payload` can be empty or Null (`None`). You can use it to schedule jobs
-  without any payload. For example, to send a notification or to run a periodic
-  task.
+If Raquel is ever updated to add new columns or indexes, you can always
+upgrade the Raquel package and generate a follow-up migration that will
+add the new changes.
 
-## Should I trust Raquel with my production?
+Currently, there are no plans to change the schema of the `jobs` table. Any
+new changes are expected to be backward compatible.
 
-Yes, you should! Here is why:
+#### Manual migration
 
-* Raquel is dead simple. Unbelievably so.
+If you are writing Alembic migrations manually, you can use the
+[example](examples/create_jobs_table/alembic.py) of one written for the
+current version of Raquel.
 
-  You can rewrite it in any programming language using plain SQL in about a
-  day. We are not going to overcomplicate things here, because everyone is already
-  sick of Celery and Co.
+## Production ready
 
-* It's incredibly reliable.
+Can you trust Raquel with your production? Yes, you can! Here is why:
 
-  The jobs are stored in a relational database and exclusive locks and rollbacks
-  are handled through ACID transactions.
+* Raquel is dead simple.
 
-* It relies on a single dependency: SQLAlchemy.
+  You can rewrite the whole library in any programming language using plain SQL
+  in about a day. We keep the code simple and maintainable.
 
-  The most mature and well-tested database library for Python. The codebase
-  of Raquel can remain same for ages, but you still get support for all the
-  new databases and bugfixes. We do not pin SQLAlchemy dependency strictly.
+* It's reliable.
 
-* Raquel is already used in production by several companies.
+  The jobs are stored in a relational database and exclusive row locks and
+  rollbacks are handled through ACID transactions.
 
-  Examples:
+* Already used in production by several companies.
+
   * [Dynatrace](https://www.dynatrace.com)
 
-* Raquel is licensed under the [Apache 2.0 license](LICENSE).
+* Licensed under the [Apache 2.0 license](LICENSE).
 
   You can use it in any project or fork it and do whatever you want with it.
 
-* Raquel is actively maintained by [Vagiz Duseev](https://github.com/vduseev).
+* Actively maintained.
 
-  I'm also the author of some other popular Python packages such as
+  The library is actively maintained by
+  [Vagiz Duseev](https://github.com/vduseev). who is also the author of some
+  other popular Python packages such as
   [opensearch-logger](https://github.com/vduseev/opensearch-logger).
 
-* Raquel is as platform and database agnostic.
+* Platform and database agnostic.
 
   Save yourself the pain of migrating between database vendors or versions.
   All timestamps are stored as milliseconds since epoch (UTC timezone).
   Payloads are stored as text. Job IDs are random UUIDs to allow migration
   between databases and HA setups.
 
-## Contributing
+## Fun facts
+
+* Raquel is named after the famous actress Raquel Welch. Many years ago, I
+  used to attend a local gym, where there was a shrine dedicated to Arnold
+  Schwarznegger. Posters, memorabilia, and a small statue of him. Apparently,
+  Welch was once considered as Schwarznegger's costar for the movie
+  "Conan the Barbarian". The gym owner liked this alternative casting so much
+  that he hanged a poster from the "One Million Years B.C." with her right
+  beside the statue of Arnold. I didn't watch either of these movies and
+  only found out they were never in the same film together when I sat down
+  to write this library.
+* The name Raquel is also a play on the words "queue" and "SQL".
+* The library exists because solutions like Celery and Dramatiq are too
+  complex for small scale projects, too opinionated, unpredicatable, and
+  opaque.
+
+## Contribute
 
 Contributions are welcome 🎉! See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for
 details. We follow the [Code of Conduct](docs/CODE_OF_CONDUCT.md).
