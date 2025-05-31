@@ -1,6 +1,6 @@
 [project]
 name = "raquel"
-version = "0.3.0"
+version = "0.3.1"
 description = "Simple Job Queues using SQL"
 authors = [{ name = "vduseev", email = "vagiz@duseev.com" }]
 requires-python = "~=3.10"
@@ -153,7 +153,7 @@ max-doc-length = 79
 convention = "google"
 
 [tool.bumpversion]
-current_version = "0.3.0"
+current_version = "0.3.1"
 parse = "(?P<major>\\d+)\\.(?P<minor>\\d+)\\.(?P<patch>\\d+)"
 serialize = ["{major}.{minor}.{patch}"]
 search = "{current_version}"
