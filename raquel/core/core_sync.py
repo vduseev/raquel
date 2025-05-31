@@ -7,6 +7,7 @@ from uuid import UUID
 from typing import Any, Callable, ParamSpec, Iterable, Concatenate
 
 from sqlalchemy import (
+    Engine,
     case,
     create_engine,
     desc,
@@ -321,8 +322,9 @@ class Raquel(BaseRaquel):
 
     Examples:
 
-        Initialize with SQLite
-        >>> rq = Raquel("sqlite:///jobs.db")
+        Initialize with in memory SQLite database
+        >>> engine = create_engine("sqlite:///:memory:")
+        >>> rq = Raquel(engine)
 
         Initialize with PostgreSQL
         >>> rq = Raquel("postgresql+psycopg2://postgres:postgres@localhost/postgres")
@@ -351,13 +353,17 @@ class Raquel(BaseRaquel):
         >>> rq.cancel(job.id)
 
     Args:
-        url (str): Database URL.
+        engine_or_url (Engine | str | URL): SQLAlchemy engine or database
+            connection string.
         **kwargs: Additional keyword arguments to pass to SQLAlchemy's
             ``create_engine()`` function
     """
 
-    def __init__(self, url: str | URL, **kwargs: Any) -> None:
-        self.engine = create_engine(url, **kwargs)
+    def __init__(self, engine_or_url: Engine | str | URL, **kwargs: Any) -> None:
+        if isinstance(engine_or_url, Engine):
+            self.engine = engine_or_url
+        else:
+            self.engine = create_engine(engine_or_url, **kwargs)
         self.subscriptions: list[Subscription] = []
 
     def enqueue(

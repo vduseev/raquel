@@ -4,13 +4,15 @@ import pytest
 import pytest_asyncio
 
 from raquel import Raquel, AsyncRaquel
+from sqlalchemy import create_engine
 
 
 @pytest.fixture
 def rq_sqlite():
     logging.getLogger("raquel").setLevel(logging.DEBUG)
 
-    instance = Raquel("sqlite://")
+    engine = create_engine("sqlite:///:memory:")
+    instance = Raquel(engine)
     instance.create_all()
     return instance
 

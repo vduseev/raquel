@@ -15,6 +15,7 @@ from sqlalchemy import (
     Update,
 )
 from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
     create_async_engine,
     async_sessionmaker,
     AsyncSession,
@@ -329,8 +330,9 @@ class AsyncRaquel(BaseRaquel):
 
     Examples:
 
-        Initialize with SQLite
-        >>> rq = AsyncRaquel("aiosqlite:///jobs.db")
+        Initialize with in memory SQLite database
+        >>> engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        >>> rq = AsyncRaquel(engine)
 
         Initialize with PostgreSQL
         >>> rq = AsyncRaquel("postgresql+asyncpg://postgres:postgres@localhost/postgres")
@@ -359,13 +361,17 @@ class AsyncRaquel(BaseRaquel):
         >>> await rq.cancel(job.id)
 
     Args:
-        url (str): Database URL.
+        engine_or_url (AsyncEngine | str | URL): SQLAlchemy async engine or
+            database connection string.
         **kwargs: Additional keyword arguments to pass to SQLAlchemy's
             ``create_engine()`` function
     """
 
-    def __init__(self, url: str | URL, **kwargs: Any) -> None:
-        self.engine = create_async_engine(url, **kwargs)
+    def __init__(self, engine_or_url: AsyncEngine | str | URL, **kwargs: Any) -> None:
+        if isinstance(engine_or_url, AsyncEngine):
+            self.engine = engine_or_url
+        else:
+            self.engine = create_async_engine(engine_or_url, **kwargs)
         self.async_session_factory = async_sessionmaker(
             self.engine, expire_on_commit=False
         )
