@@ -1,9 +1,8 @@
 import asyncio
-import functools
 import logging
 from datetime import datetime, timezone, timedelta
 from uuid import UUID
-from typing import Any, Callable, Awaitable, ParamSpec, Iterable, Concatenate
+from typing import Any, Callable, Awaitable, Iterable
 
 from sqlalchemy import (
     case,
@@ -27,11 +26,9 @@ from raquel.models.base_job import JobStatusValueType
 from raquel.models.job import Job, RawJob
 from raquel.models.queue_stats import QueueStats
 from raquel.models.base_sql import BaseSQL
-from raquel.core.base import BaseRaquel, StopSubscription
+from raquel.core.base import BaseRaquel, StopSubscription, DecoratedCallable
 from raquel.core import common
 
-
-P = ParamSpec("SubscriberParamsSpec")
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +36,7 @@ logger = logging.getLogger(__name__)
 class AsyncSubscription:
     def __init__(
         self,
-        fn: Callable[Concatenate[Job, P], Awaitable[Any]],
+        fn: DecoratedCallable,
         broker: "AsyncRaquel",
         queues: tuple[str],
         claim_as: str | None = None,
@@ -48,7 +45,6 @@ class AsyncSubscription:
         raise_stop_on_unhandled_exc: bool = False,
         reclaim_after: int = 60 * 1000,
     ) -> None:
-        functools.update_wrapper(self, fn)
         self.fn = fn
         self.broker = broker
         self.queues = queues
@@ -57,10 +53,13 @@ class AsyncSubscription:
         self.sleep = sleep
         self.raise_stop_on_unhandled_exc = raise_stop_on_unhandled_exc
         self.reclaim_after = reclaim_after
+        self.stop_event = asyncio.Event()        
 
-        self.stop_event = asyncio.Event()
+    async def run(self) -> None:
+        """Launch the subscription.
 
-    async def __call__(self, *args: P.args, **kwargs: P.kwargs) -> None:
+        Runs the subscribed function in a loop, processing jobs as they arrive.
+        """
         logger.info(
             f"Starting {self.fn.__module__}.{self.fn.__qualname__} subscription to queues {self.queues}"
         )
@@ -77,7 +76,7 @@ class AsyncSubscription:
                     reclaim_after=self.reclaim_after,
                 ) as job:
                     if job:
-                        await self.fn(job, *args, **kwargs)
+                        await self.fn(job)
                     else:
                         await asyncio.sleep(self.sleep / 1000)
 
@@ -87,39 +86,15 @@ class AsyncSubscription:
                 )
                 return
             except KeyboardInterrupt:
-                logger.debug(
+                logger.info(
                     f"Subscription interrupted by KeyboardInterrupt signal"
                 )
-                raise
+                return
             except asyncio.CancelledError:
-                logger.debug(
+                logger.info(
                     f"Subscription interrupted by CancelledError signal"
                 )
-                raise
-
-    async def run(self, *args: P.args, **kwargs: P.kwargs) -> None:
-        """Launch the subscription.
-
-        Runs the subscribed function in a loop, processing jobs as they arrive.
-
-        This is a sematically equivalent to calling the decorated function
-        directly.
-
-        Examples:
-
-            Decorate a function to subscribe to the "default" and
-            "high-priority" queues:
-
-            >>> @rq.subscribe("default", "high-priority", claim_as="worker-1"):
-            ... async def process_job(job: Job) -> None:
-            ...     print(f"Processing job {job.id}")
-
-            Launch the subscriber:
-
-            >>> await process_job.run()
-
-        """
-        await self.__call__(*args, **kwargs)
+                return
 
     def stop(self) -> None:
         """Request the subscriber to stop.
@@ -462,6 +437,72 @@ class AsyncRaquel(BaseRaquel):
 
             job = Job.from_raw_job(raw_job)
         return job
+    
+    def add_subscription(
+        self,
+        fn: DecoratedCallable,
+        queues: str | Iterable[str],
+        claim_as: str | None = None,
+        expire: bool = True,
+        sleep: int = 1000,
+        raise_stop_on_unhandled_exc: bool = False,
+        reclaim_after: int = 60 * 1000,
+    ) -> AsyncSubscription:
+        """This is an experimental API. Subject to change.
+        
+        Add a subscription to the broker that will execute the callback function
+        in a loop, processing dequeued jobs. If an unhandled exception occurs,
+        the job will be automatically marked as failed and rescheduled based on
+        the job's retry parameters.
+
+        The first and only argument of the callback function should always be
+        a ``Job``, which will be passed by the subscription for every new job
+        that arrives.
+
+        Examples:
+            Subscribe a function to the "default" queue
+            >>> async def process_job(job) -> None:
+            ...     print(f"All good: {job.payload}")
+            >>> subscription = rq.add_subscription(process_job, "default")
+            >>> await subscription.run()
+
+        Args:
+            fn (DecoratedCallable): Callback function to process jobs.
+            queues (str | Iterable[str]): The queues to subscribe to.
+            claim_as (str | None): Optional parameter to identify whoever
+                is locking the job. Defaults to None.
+            expire (bool): Cancel expired jobs by running an
+                ``UPDATE`` query in a separate transaction before claiming
+                a new job. Defaults to True.
+            sleep (int): Time to sleep between iterations in milliseconds.
+                Defaults to 1000 ms.
+            raise_stop_on_unhandled_exc (bool): Raise a ``StopSubscription``
+                exception if an unhandled exception occurs while processing
+                the job. Defaults to False.
+            reclaim_after (int): Optional parameter to specify the
+                reclaim delay in milliseconds. If a job was claimed but
+                wasn't processed and the row remains unlocked, then it can
+                be reclaimed after this delay. The delay is calculated from
+                the previous ``claimed_at`` time. Defaults to 1 minute.
+
+        Returns:
+            AsyncSubscription: The subscription object.
+        """
+        if isinstance(queues, str):
+            queues = [queues]
+
+        subscription = AsyncSubscription(
+            fn=fn,
+            broker=self,
+            queues=queues,
+            claim_as=claim_as,
+            expire=expire,
+            sleep=sleep,
+            raise_stop_on_unhandled_exc=raise_stop_on_unhandled_exc,
+            reclaim_after=reclaim_after,
+        )
+        self.subscriptions.append(subscription) 
+        return subscription
 
     def subscribe(
         self,
@@ -471,33 +512,29 @@ class AsyncRaquel(BaseRaquel):
         sleep: int = 1000,
         raise_stop_on_unhandled_exc: bool = False,
         reclaim_after: int = 60 * 1000,
-    ) -> Callable[
-        [Callable[Concatenate[Job, P], Awaitable[None]]], AsyncSubscription
-    ]:
-        """Decorate a function to subscribe to one or more queues and process
+    ) -> Callable[[DecoratedCallable], AsyncSubscription]:
+        """This is an experimental API. Subject to change.
+        
+        Decorate a function to subscribe to one or more queues and process
         jobs as they arrive.
 
         The decorated function will be executed in a loop, processing dequeued
         jobs. If an unhandled exception occurs, the job will be automatically
         marked as failed and rescheduled based on the job's retry parameters.
 
-        The first argument of the decorated function should always be a
-        ``Job``, which will be passed by the decorator for every new job
+        The first and only argument of the decorated function should always be
+        a ``Job``, which will be passed by the subscription for every new job
         that arrives.
 
         Examples:
 
             Subscribe to the "default" and "high-priority" queues
             >>> @rq.subscribe("default", "high-priority", claim_as="worker-1"):
-            ... async def process_job(job, max_size=100) -> None:
-            ...     if len(job.payload) > max_size:
-            ...         # Reschedule the job to be processed in 10 seconds
-            ...         job.reschedule(delay=10_000)
-            ...     else:
-            ...         print(f"All good: {job.payload}")
+            ... async def process_job(job) -> None:
+            ...     print(f"All good: {job.payload}")
 
-            Launch the subscription
-            >>> await process_job.run(max_size=80)
+            Launch all subscriptions
+            >>> rq.run_subscriptions()
 
             Stop the subscription after processing the first job
             >>> @rq.subscribe("default"):
@@ -520,11 +557,10 @@ class AsyncRaquel(BaseRaquel):
         """
 
         def decorator(
-            fn: Callable[Concatenate[Job, P], Awaitable[None]],
-        ) -> AsyncSubscription:
-            subscription = AsyncSubscription(
+            fn: DecoratedCallable,
+        ) -> DecoratedCallable:
+            self.add_subscription(
                 fn=fn,
-                broker=self,
                 queues=queues,
                 claim_as=claim_as,
                 expire=expire,
@@ -532,10 +568,27 @@ class AsyncRaquel(BaseRaquel):
                 raise_stop_on_unhandled_exc=raise_stop_on_unhandled_exc,
                 reclaim_after=reclaim_after,
             )
-            self.subscriptions.append(subscription)
-            return subscription
-
+            return fn
         return decorator
+
+    async def run_subscriptions(self) -> None:
+        """This is an experimental API. Subject to change.
+        
+        Run all registered subscriptions.
+        
+        This method will spawn a task for each subscription and run it in
+        a loop, processing dequeued jobs.
+
+        The call to this method will block until the process is interrupted
+        by a signal.
+        """
+        if not self.subscriptions:
+            logger.warning("No subscriptions registered")
+            return
+        
+        tasks = [asyncio.create_task(s.run()) for s in self.subscriptions]
+        await asyncio.gather(*tasks)
+        logger.info("All subscriptions have finished")
 
     def dequeue(
         self,

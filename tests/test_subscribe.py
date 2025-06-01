@@ -3,24 +3,18 @@ from datetime import datetime, timezone
 import pytest
 
 from raquel import Raquel, AsyncRaquel, StopSubscription, Job
-from .fixtures import rq_sqlite, rq_asyncpg
+from .fixtures import rq_psycopg2, rq_asyncpg
 
 
-def test_basic_subscribe(rq_sqlite: Raquel):
-    rq_sqlite.enqueue("default", {"foo": "bar"})
-    rq_sqlite.enqueue("tasks", 1)
+def test_basic_subscribe(rq_psycopg2: Raquel):
+    rq_psycopg2.enqueue("default", {"foo": "bar"})
+    rq_psycopg2.enqueue("tasks", 1)
 
-    count = 0
-
-    @rq_sqlite.subscribe("default", "tasks")
+    @rq_psycopg2.subscribe("default", "tasks")
     def worker(job: Job):
-        nonlocal count
-        count += 1
-
-        if count == 1:
-            assert job.queue == "default"
+        if job.queue == "default":
             assert job.payload == {"foo": "bar"}
-            assert job.status == rq_sqlite.CLAIMED
+            assert job.status == rq_psycopg2.CLAIMED
             assert job.max_age == None
             assert job.max_retry_count == None
             assert job.enqueued_at <= datetime.now(timezone.utc)
@@ -28,16 +22,14 @@ def test_basic_subscribe(rq_sqlite: Raquel):
             assert job.attempts == 0
             assert job.claimed_at <= datetime.now(timezone.utc)
             assert job.finished_at == None
-        elif count == 2:
-            assert job.queue == "tasks"
+        elif job.queue == "tasks":
             assert job.payload == 1
             raise StopSubscription
         
-    # Launch the subscriber. It will stop after 2 iterations
-    worker.run()
+    rq_psycopg2.run_subscriptions()
 
     # Make sure the jobs are not in the queues anymore
-    assert not rq_sqlite.claim()
+    assert not rq_psycopg2.claim()
 
 
 @pytest.mark.asyncio
@@ -45,15 +37,9 @@ async def test_basic_subscribe_async(rq_asyncpg: AsyncRaquel):
     await rq_asyncpg.enqueue("default", {"foo": "bar"})
     await rq_asyncpg.enqueue("tasks", 1)
 
-    count = 0
-
     @rq_asyncpg.subscribe("default", "tasks")
     async def worker(job: Job):
-        nonlocal count
-        count += 1
-
-        if count == 1:
-            assert job.queue == "default"
+        if job.queue == "default":
             assert job.payload == {"foo": "bar"}
             assert job.status == rq_asyncpg.CLAIMED
             assert job.max_age == None
@@ -63,39 +49,37 @@ async def test_basic_subscribe_async(rq_asyncpg: AsyncRaquel):
             assert job.attempts == 0
             assert job.claimed_at <= datetime.now(timezone.utc)
             assert job.finished_at == None
-        elif count == 2:
-            assert job.queue == "tasks"
+        elif job.queue == "tasks":
             assert job.payload == 1
             raise StopSubscription
         
-    await worker.run()
+    await rq_asyncpg.run_subscriptions()
 
     # Make sure the jobs are not in the queues anymore
     assert not await rq_asyncpg.claim()
 
 
-def test_reject_subscribe(rq_sqlite: Raquel):
-    enqueued_job = rq_sqlite.enqueue("default", {"foo": "bar"})
+def test_reject_subscribe(rq_psycopg2: Raquel):
+    enqueued_job = rq_psycopg2.enqueue("default", {"foo": "bar"})
 
-    @rq_sqlite.subscribe("default")
-    def worker(job: Job, stop: bool = False):
+    def worker(job: Job):
         assert job.queue == "default"
         assert job.payload == {"foo": "bar"}
-        assert job.status == rq_sqlite.CLAIMED
+        assert job.status == rq_psycopg2.CLAIMED
         assert job.attempts == 0
 
         job.reject()
-        if stop:
-            raise StopSubscription
+        raise StopSubscription
     
-    worker.run(stop=True)
+    subscription = rq_psycopg2.add_subscription(worker, "default")
+    subscription.run()
 
-    assert rq_sqlite.count("default") == 1
-    assert rq_sqlite.count("default", rq_sqlite.QUEUED) == 1
+    assert rq_psycopg2.count("default") == 1
+    assert rq_psycopg2.count("default", rq_psycopg2.QUEUED) == 1
 
-    updated_job = rq_sqlite.get(enqueued_job.id)
+    updated_job = rq_psycopg2.get(enqueued_job.id)
     assert updated_job.attempts == 1
-    assert updated_job.status == rq_sqlite.QUEUED
+    assert updated_job.status == rq_psycopg2.QUEUED
     assert updated_job.claimed_at == None
 
 
@@ -103,18 +87,17 @@ def test_reject_subscribe(rq_sqlite: Raquel):
 async def test_reject_subscribe_async(rq_asyncpg: AsyncRaquel):
     enqueued_job = await rq_asyncpg.enqueue("default", {"foo": "bar"})
 
-    @rq_asyncpg.subscribe("default")
-    async def worker(job: Job, stop: bool = False):
+    async def worker(job: Job):
         assert job.queue == "default"
         assert job.payload == {"foo": "bar"}
         assert job.status == rq_asyncpg.CLAIMED
         assert job.attempts == 0
 
         job.reject()
-        if stop:
-            raise StopSubscription
+        raise StopSubscription
         
-    await worker.run(stop=True)
+    subscription = rq_asyncpg.add_subscription(worker, "default")
+    await subscription.run()
 
     assert await rq_asyncpg.count("default") == 1
     assert await rq_asyncpg.count("default", rq_asyncpg.QUEUED) == 1
@@ -125,26 +108,26 @@ async def test_reject_subscribe_async(rq_asyncpg: AsyncRaquel):
     assert updated_job.claimed_at == None
 
 
-def test_exception(rq_sqlite: Raquel):
-    enqueued_job = rq_sqlite.enqueue("default", {"foo": "bar"})
+def test_exception(rq_psycopg2: Raquel):
+    enqueued_job = rq_psycopg2.enqueue("default", {"foo": "bar"})
 
-    @rq_sqlite.subscribe("default", raise_stop_on_unhandled_exc=True)
+    @rq_psycopg2.subscribe("default", raise_stop_on_unhandled_exc=True)
     def worker(job: Job):
         assert job.queue == "default"
         assert job.payload == {"foo": "bar"}
-        assert job.status == rq_sqlite.CLAIMED
+        assert job.status == rq_psycopg2.CLAIMED
         assert job.attempts == 0
 
         raise ValueError("Won't do")
     
-    worker.run()
+    rq_psycopg2.run_subscriptions()
 
-    assert rq_sqlite.count("default") == 1
-    assert rq_sqlite.count("default", rq_sqlite.FAILED) == 1
+    assert rq_psycopg2.count("default") == 1
+    assert rq_psycopg2.count("default", rq_psycopg2.FAILED) == 1
 
-    updated_job = rq_sqlite.get(enqueued_job.id)
+    updated_job = rq_psycopg2.get(enqueued_job.id)
     assert updated_job.attempts == 1
-    assert updated_job.status == rq_sqlite.FAILED
+    assert updated_job.status == rq_psycopg2.FAILED
     assert updated_job.error == "Won't do"
 
 
@@ -161,7 +144,7 @@ async def test_exception_async(rq_asyncpg: AsyncRaquel):
 
         raise ValueError("Won't do")
     
-    await worker.run()
+    await rq_asyncpg.run_subscriptions()
     
     assert await rq_asyncpg.count("default") == 1
     assert await rq_asyncpg.count("default", rq_asyncpg.FAILED) == 1
@@ -172,27 +155,27 @@ async def test_exception_async(rq_asyncpg: AsyncRaquel):
     assert updated_job.error == "Won't do"
 
 
-def test_manual_fail(rq_sqlite: Raquel):
-    enqueued_job = rq_sqlite.enqueue("default", {"foo": "bar"})
+def test_manual_fail(rq_psycopg2: Raquel):
+    enqueued_job = rq_psycopg2.enqueue("default", {"foo": "bar"})
 
-    @rq_sqlite.subscribe("default")
     def worker(job: Job):
         assert job.queue == "default"
         assert job.payload == {"foo": "bar"}
-        assert job.status == rq_sqlite.CLAIMED
+        assert job.status == rq_psycopg2.CLAIMED
         assert job.attempts == 0
 
         job.fail("Won't do")
         raise StopSubscription
     
-    worker.run()
+    subscription = rq_psycopg2.add_subscription(worker, "default")
+    subscription.run()
 
-    assert rq_sqlite.count("default") == 1
-    assert rq_sqlite.count("default", rq_sqlite.FAILED) == 1
+    assert rq_psycopg2.count("default") == 1
+    assert rq_psycopg2.count("default", rq_psycopg2.FAILED) == 1
 
-    updated_job = rq_sqlite.get(enqueued_job.id)
+    updated_job = rq_psycopg2.get(enqueued_job.id)
     assert updated_job.attempts == 1
-    assert updated_job.status == rq_sqlite.FAILED
+    assert updated_job.status == rq_psycopg2.FAILED
     assert updated_job.error == "Won't do"
 
 
@@ -200,7 +183,6 @@ def test_manual_fail(rq_sqlite: Raquel):
 async def test_manual_fail_async(rq_asyncpg: AsyncRaquel):
     enqueued_job = await rq_asyncpg.enqueue("default", {"foo": "bar"})
 
-    @rq_asyncpg.subscribe("default")
     async def worker(job: Job):
         assert job.queue == "default"
         assert job.payload == {"foo": "bar"}
@@ -210,7 +192,8 @@ async def test_manual_fail_async(rq_asyncpg: AsyncRaquel):
         job.fail("Won't do")
         raise StopSubscription
     
-    await worker.run()
+    subscription = rq_asyncpg.add_subscription(worker, "default")
+    await subscription.run()
 
     assert await rq_asyncpg.count("default") == 1
     assert await rq_asyncpg.count("default", rq_asyncpg.FAILED) == 1
@@ -221,14 +204,13 @@ async def test_manual_fail_async(rq_asyncpg: AsyncRaquel):
     assert updated_job.error == "Won't do"
 
 
-def test_manual_catch_exception(rq_sqlite: Raquel):
-    enqueued_job = rq_sqlite.enqueue("default", {"foo": "bar"})
+def test_manual_catch_exception(rq_psycopg2: Raquel):
+    enqueued_job = rq_psycopg2.enqueue("default", {"foo": "bar"})
 
-    @rq_sqlite.subscribe("default")
     def worker(job: Job):
         assert job.queue == "default"
         assert job.payload == {"foo": "bar"}
-        assert job.status == rq_sqlite.CLAIMED
+        assert job.status == rq_psycopg2.CLAIMED
         assert job.attempts == 0
 
         try:
@@ -237,14 +219,15 @@ def test_manual_catch_exception(rq_sqlite: Raquel):
             pass
         raise StopSubscription
     
-    worker.run()
+    subscription = rq_psycopg2.add_subscription(worker, "default")
+    subscription.run()
 
-    assert rq_sqlite.count("default") == 1
-    assert rq_sqlite.count("default", rq_sqlite.SUCCESS) == 1
+    assert rq_psycopg2.count("default") == 1
+    assert rq_psycopg2.count("default", rq_psycopg2.SUCCESS) == 1
 
-    updated_job = rq_sqlite.get(enqueued_job.id)
+    updated_job = rq_psycopg2.get(enqueued_job.id)
     assert updated_job.attempts == 1
-    assert updated_job.status == rq_sqlite.SUCCESS
+    assert updated_job.status == rq_psycopg2.SUCCESS
     assert updated_job.error is None
 
 
@@ -253,7 +236,6 @@ def test_manual_catch_exception(rq_sqlite: Raquel):
 async def test_manual_catch_exception_async(rq_asyncpg: AsyncRaquel):
     enqueued_job = await rq_asyncpg.enqueue("default", {"foo": "bar"})
 
-    @rq_asyncpg.subscribe("default")
     async def worker(job: Job):
         assert job.queue == "default"
         assert job.payload == {"foo": "bar"}
@@ -266,7 +248,8 @@ async def test_manual_catch_exception_async(rq_asyncpg: AsyncRaquel):
             pass
         raise StopSubscription
     
-    await worker.run()
+    subscription = rq_asyncpg.add_subscription(worker, "default")
+    await subscription.run()
 
     assert await rq_asyncpg.count("default") == 1
     assert await rq_asyncpg.count("default", rq_asyncpg.SUCCESS) == 1
@@ -277,27 +260,27 @@ async def test_manual_catch_exception_async(rq_asyncpg: AsyncRaquel):
     assert updated_job.error is None
 
 
-def test_reschedule(rq_sqlite: Raquel):
-    enqueued_job = rq_sqlite.enqueue("default", {"foo": "bar"})
+def test_reschedule(rq_psycopg2: Raquel):
+    enqueued_job = rq_psycopg2.enqueue("default", {"foo": "bar"})
 
-    @rq_sqlite.subscribe("default")
     def worker(job: Job):
         assert job.queue == "default"
         assert job.payload == {"foo": "bar"}
-        assert job.status == rq_sqlite.CLAIMED
+        assert job.status == rq_psycopg2.CLAIMED
         assert job.attempts == 0
 
         job.reschedule(delay=1000)
         raise StopSubscription
     
-    worker.run()
+    subscription = rq_psycopg2.add_subscription(worker, "default")
+    subscription.run()
 
-    assert rq_sqlite.count("default") == 1
-    assert rq_sqlite.count("default", rq_sqlite.QUEUED) == 1
+    assert rq_psycopg2.count("default") == 1
+    assert rq_psycopg2.count("default", rq_psycopg2.QUEUED) == 1
 
-    updated_job = rq_sqlite.get(enqueued_job.id)
+    updated_job = rq_psycopg2.get(enqueued_job.id)
     assert updated_job.attempts == 1
-    assert updated_job.status == rq_sqlite.QUEUED
+    assert updated_job.status == rq_psycopg2.QUEUED
     assert updated_job.error is None
     assert updated_job.scheduled_at > datetime.now(timezone.utc)
 
@@ -306,7 +289,6 @@ def test_reschedule(rq_sqlite: Raquel):
 async def test_reschedule_async(rq_asyncpg: AsyncRaquel):
     enqueued_job = await rq_asyncpg.enqueue("default", {"foo": "bar"})
 
-    @rq_asyncpg.subscribe("default")
     async def worker(job: Job):
         assert job.queue == "default"
         assert job.payload == {"foo": "bar"}
@@ -316,7 +298,8 @@ async def test_reschedule_async(rq_asyncpg: AsyncRaquel):
         job.reschedule(delay=1000)
         raise StopSubscription
     
-    await worker.run()
+    subscription = rq_asyncpg.add_subscription(worker, "default")
+    await subscription.run()
 
     assert await rq_asyncpg.count("default") == 1
     assert await rq_asyncpg.count("default", rq_asyncpg.QUEUED) == 1

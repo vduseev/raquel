@@ -1,10 +1,10 @@
-import functools
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 from threading import Event
 from uuid import UUID
-from typing import Any, Callable, ParamSpec, Iterable, Concatenate
+from typing import Any, Callable, Iterable
 
 from sqlalchemy import (
     Engine,
@@ -25,11 +25,9 @@ from raquel.models.base_job import JobStatusValueType
 from raquel.models.job import Job, RawJob
 from raquel.models.queue_stats import QueueStats
 from raquel.models.base_sql import BaseSQL
-from raquel.core.base import BaseRaquel, StopSubscription
+from raquel.core.base import BaseRaquel, StopSubscription, DecoratedCallable
 from raquel.core import common
 
-
-P = ParamSpec("SubscriberParamSpec")
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +35,7 @@ logger = logging.getLogger(__name__)
 class Subscription:
     def __init__(
         self,
-        fn: Callable[Concatenate[Job, P], Any],
+        fn: DecoratedCallable,
         broker: "Raquel",
         queues: tuple[str],
         claim_as: str | None = None,
@@ -46,7 +44,6 @@ class Subscription:
         raise_stop_on_unhandled_exc: bool = False,
         reclaim_after: int = 60 * 1000,
     ) -> None:
-        functools.update_wrapper(self, fn)
         self.fn = fn
         self.broker = broker
         self.queues = queues
@@ -55,10 +52,13 @@ class Subscription:
         self.sleep = sleep
         self.raise_stop_on_unhandled_exc = raise_stop_on_unhandled_exc
         self.reclaim_after = reclaim_after
-
         self.stop_event = Event()
 
-    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> None:
+    def run(self) -> None:
+        """Launch the subscription.
+
+        Runs the subscribed function in a loop, processing jobs as they arrive.
+        """
         logger.info(
             f"Starting {self.fn.__module__}.{self.fn.__qualname__} subscription to queues {self.queues}"
         )
@@ -75,7 +75,7 @@ class Subscription:
                     reclaim_after=self.reclaim_after,
                 ) as job:
                     if job:
-                        self.fn(job, *args, **kwargs)
+                        self.fn(job)
                     else:
                         time.sleep(self.sleep / 1000)
 
@@ -85,34 +85,10 @@ class Subscription:
                 )
                 return
             except KeyboardInterrupt:
-                logger.debug(
+                logger.info(
                     f"Subscription interrupted by KeyboardInterrput signal"
                 )
-                raise
-
-    def run(self, *args: P.args, **kwargs: P.kwargs) -> None:
-        """Launch the subscription.
-
-        Runs the subscribed function in a loop, processing jobs as they arrive.
-
-        This is a sematically equivalent to calling the decorated function
-        directly.
-
-        Examples:
-
-            Decorate a function to subscribe to the "default" and
-            "high-priority" queues:
-
-            >>> @rq.subscribe("default", "high-priority", claim_as="worker-1"):
-            ... def process_job(job: Job) -> None:
-            ...     print(f"Processing job {job.id}")
-
-            Launch the subscriber:
-
-            >>> process_job.run()
-
-        """
-        self.__call__(*args, **kwargs)
+                return
 
     def stop(self) -> None:
         """Request the subscriber to stop.
@@ -450,6 +426,73 @@ class Raquel(BaseRaquel):
 
             job = Job.from_raw_job(raw_job)
             return job
+        
+    def add_subscription(
+        self,
+        fn: DecoratedCallable,
+        queues: str | Iterable[str],
+        claim_as: str | None = None,
+        expire: bool = True,
+        sleep: int = 1000,
+        raise_stop_on_unhandled_exc: bool = False,
+        reclaim_after: int = 60 * 1000,
+    ) -> Subscription:
+        """This is an experimental API. Subject to change.
+        
+        Add a subscription to the broker that will execute the callback function
+        in a loop, processing dequeued jobs. If an unhandled exception occurs,
+        the job will be automatically marked as failed and rescheduled based on
+        the job's retry parameters.
+
+        The first and only argument of the callback function should always be
+        a ``Job``, which will be passed by the subscription for every new job
+        that arrives.
+
+        Examples:
+
+            Subscribe a function to the "default" queue
+            >>> def process_job(job) -> None:
+            ...     print(f"All good: {job.payload}")
+            >>> subscription = rq.add_subscription(process_job, "default")
+            >>> subscription.run()
+
+        Args:
+            fn (DecoratedCallable): Callback function to process jobs.
+            queues (str | Iterable[str]): The queues to subscribe to.
+            claim_as (str | None): Optional parameter to identify whoever
+                is locking the job. Defaults to None.
+            expire (bool): Cancel expired jobs by running an
+                ``UPDATE`` query in a separate transaction before claiming
+                a new job. Defaults to True.
+            sleep (int): Time to sleep between iterations in milliseconds.
+                Defaults to 1000 ms.
+            raise_stop_on_unhandled_exc (bool): Raise a ``StopSubscription``
+                exception if an unhandled exception occurs while processing
+                the job. Defaults to False.
+            reclaim_after (int): Optional parameter to specify the
+                reclaim delay in milliseconds. If a job was claimed but
+                wasn't processed and the row remains unlocked, then it can
+                be reclaimed after this delay. The delay is calculated from
+                the previous ``claimed_at`` time. Defaults to 1 minute.
+
+        Returns:
+            Subscription: The subscription object.
+        """
+        if isinstance(queues, str):
+            queues = [queues]
+
+        subscription = Subscription(
+            fn=fn,
+            broker=self,
+            queues=queues,
+            claim_as=claim_as,
+            expire=expire,
+            sleep=sleep,
+            raise_stop_on_unhandled_exc=raise_stop_on_unhandled_exc,
+            reclaim_after=reclaim_after,
+        )
+        self.subscriptions.append(subscription) 
+        return subscription
 
     def subscribe(
         self,
@@ -459,31 +502,30 @@ class Raquel(BaseRaquel):
         sleep: int = 1000,
         raise_stop_on_unhandled_exc: bool = False,
         reclaim_after: int = 60 * 1000,
-    ) -> Callable[[Callable[Concatenate[Job, P], None]], Subscription]:
-        """Decorate a function to subscribe to one or more queues and process
+    ) -> Callable[[DecoratedCallable], DecoratedCallable]:
+        """This is an experimental API. Subject to change.
+
+        Decorate a function to subscribe to one or more queues and process
         jobs as they arrive.
 
         The decorated function will be executed in a loop, processing dequeued
         jobs. If an unhandled exception occurs, the job will be automatically
         marked as failed and rescheduled based on the job's retry parameters.
 
-        The first argument of the decorated function should always be a
-        ``Job``, which will be passed by the decorator for every new job
+        The first and only argument of the decorated function should always be
+        a ``Job``, which will be passed by the decorator for every new job
         that arrives.
 
         Examples:
 
-            Subscribe to the "default" and "high-priority" queues
+            Register a worker by subscribing a function to the "default"
+            and "high-priority" queues
             >>> @rq.subscribe("default", "high-priority", claim_as="worker-1"):
-            ... def process_job(job, max_size=100) -> None:
-            ...     if len(job.payload) > max_size:
-            ...         # Reschedule the job to be processed in 10 seconds
-            ...         job.reschedule(delay=10_000)
-            ...     else:
-            ...         print(f"All good: {job.payload}")
+            ... def process_job(job) -> None:
+            ...     print(f"All good: {job.payload}")
 
-            Launch the subscription
-            >>> process_job.run(max_size=80)
+            Launch all subscriptions
+            >>> rq.run_subscriptions()
 
             Stop the subscription after processing the first job
             >>> @rq.subscribe("default"):
@@ -510,10 +552,9 @@ class Raquel(BaseRaquel):
                 the previous ``claimed_at`` time. Defaults to 1 minute.
         """
 
-        def decorator(fn: Callable[Concatenate[Job, P], None]) -> Subscription:
-            subscription = Subscription(
+        def decorator(fn: DecoratedCallable) -> DecoratedCallable:
+            self.add_subscription(
                 fn=fn,
-                broker=self,
                 queues=queues,
                 claim_as=claim_as,
                 expire=expire,
@@ -521,10 +562,48 @@ class Raquel(BaseRaquel):
                 raise_stop_on_unhandled_exc=raise_stop_on_unhandled_exc,
                 reclaim_after=reclaim_after,
             )
-            self.subscriptions.append(subscription)
-            return subscription
-
+            return fn
         return decorator
+    
+    def run_subscriptions(self) -> None:
+        """This is an experimental API. Subject to change.
+        
+        Run all registered subscriptions.
+        
+        This method will spawn a thread for each subscription and run it in
+        a loop, processing dequeued jobs.
+
+        The call to this method will block until the process is interrupted
+        by a signal.
+
+        Examples:
+
+            Register a subscription with a decorator
+            >>> @rq.subscribe("default"):
+            ... def process_foo(job: Job) -> None:
+            ...     print(f"Processing foo {job.id}")
+
+            Create a subscription manually
+            >>> def process_bar(job: Job) -> None:
+            ...     print(f"Processing bar {job.id}")
+            >>> subscription = rq.add_subscription(process_bar, "default")
+
+            Launch all subscriptions
+            >>> rq.run_subscriptions()
+
+        Args:
+            None
+        """
+        if not self.subscriptions:
+            logger.warning("No subscriptions registered")
+            return
+        
+        with ThreadPoolExecutor(max_workers=len(self.subscriptions)) as pool:
+            futures = [pool.submit(s.run) for s in self.subscriptions]
+            for future in futures:
+                future.result()
+        
+        logger.info("All subscriptions have finished")
 
     def dequeue(
         self,

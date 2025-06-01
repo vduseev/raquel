@@ -1,10 +1,14 @@
 from uuid import UUID
 from datetime import datetime, timedelta
+from typing import Callable, TypeVar, Any
 
 from sqlalchemy import update, Update
 
 from raquel.models.base_job import BaseJob
 from raquel.models.raw_job import RawJob
+
+
+DecoratedCallable = TypeVar("DecoratedCallable", bound=Callable[..., Any])
 
 
 class StopSubscription(BaseException):
