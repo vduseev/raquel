@@ -27,6 +27,7 @@ from raquel.models.job import Job, RawJob
 from raquel.models.queue_stats import QueueStats
 from raquel.models.base_sql import BaseSQL
 from raquel.core.base import BaseRaquel, StopSubscription, DecoratedCallable
+from raquel.core.common import is_serialization_failure
 from raquel.core import common
 
 
@@ -278,8 +279,33 @@ class AsyncDequeueContextManager:
                     self.job.id, self.attempt_num, finished_at_ms
                 )
 
-        await self.session.execute(stmt)
-        await self.session.commit()
+        # Retry the transaction on serialization failures (CockroachDB, PostgreSQL)
+        max_retries = 3
+        retry_delay = 0.1  # Start with 100ms
+        for attempt in range(max_retries):
+            try:
+                await self.session.execute(stmt)
+                await self.session.commit()
+                break  # Success, exit the retry loop
+            except Exception as e:
+                if is_serialization_failure(e):
+                    await self.session.rollback()
+                    if attempt < max_retries - 1:
+                        logger.warning(
+                            f"Serialization failure when updating job {self.job.id}, "
+                            f"retrying (attempt {attempt + 1}/{max_retries}): {e}"
+                        )
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    else:
+                        logger.error(
+                            f"Failed to update job {self.job.id} after {max_retries} retries: {e}"
+                        )
+                        raise
+                else:
+                    # For other exceptions, don't retry
+                    raise
+        
         await self.session.close()
 
         # An option to force-quit the subscribe() loop if an unhandled
@@ -685,58 +711,85 @@ class AsyncRaquel(BaseRaquel):
         p = common.parse_claim_params(
             *queues, before=before, claim_as=claim_as
         )
-        job: Job | None = None
-        # Retrieve the earliest scheduled job in the queue and lock the row.
-        async with self.async_session_factory() as session:
-            where_clause = (
-                or_(
-                    RawJob.status.in_([self.QUEUED, self.FAILED]),
-                    and_(
-                        RawJob.status == self.CLAIMED,
-                        RawJob.claimed_at + reclaim_after <= p.now_ms,
-                    ),
-                ),
-                RawJob.scheduled_at <= p.before_ms,
-                or_(
-                    RawJob.max_age.is_(None),
-                    RawJob.enqueued_at + RawJob.max_age >= p.now_ms,
-                ),
-            )
-            if p.queues:
-                where_clause = (RawJob.queue.in_(p.queues),) + where_clause
-
-            select_oldest_stmt = (
-                select(RawJob)
-                .where(*where_clause)
-                .order_by(RawJob.scheduled_at)
-                .limit(1)
-                .with_for_update(skip_locked=True)
-            )
-            select_oldest_result = await session.execute(select_oldest_stmt)
-            raw_job = select_oldest_result.scalars().first()
-            if not raw_job:
-                logger.debug(f"No job available in queue {queues}")
-            else:
-                # Lock the job
-                update_claim_stmt = (
-                    update(RawJob)
-                    .where(RawJob.id == raw_job.id)
-                    .values(
-                        status=self.CLAIMED,
-                        claimed_at=p.now_ms,
-                        claimed_by=p.claim_as,
+        
+        # Retry the transaction on serialization failures
+        max_retries = 3
+        retry_delay = 0.1  # Start with 100ms
+        
+        for attempt in range(max_retries):
+            try:
+                job: Job | None = None
+                # Retrieve the earliest scheduled job in the queue and lock the row.
+                async with self.async_session_factory() as session:
+                    where_clause = (
+                        or_(
+                            RawJob.status.in_([self.QUEUED, self.FAILED]),
+                            and_(
+                                RawJob.status == self.CLAIMED,
+                                RawJob.claimed_at + reclaim_after <= p.now_ms,
+                            ),
+                        ),
+                        RawJob.scheduled_at <= p.before_ms,
+                        or_(
+                            RawJob.max_age.is_(None),
+                            RawJob.enqueued_at + RawJob.max_age >= p.now_ms,
+                        ),
                     )
-                )
-                await session.execute(update_claim_stmt)
-                await session.commit()
+                    if p.queues:
+                        where_clause = (RawJob.queue.in_(p.queues),) + where_clause
 
-                job = Job.from_raw_job(raw_job)
-                job.status = self.CLAIMED
-                job.claimed_at = datetime.fromtimestamp(
-                    p.before_ms / 1000, timezone.utc
-                )
-                job.claimed_by = p.claim_as
-        return job
+                    select_oldest_stmt = (
+                        select(RawJob)
+                        .where(*where_clause)
+                        .order_by(RawJob.scheduled_at)
+                        .limit(1)
+                        .with_for_update(skip_locked=True)
+                    )
+                    select_oldest_result = await session.execute(select_oldest_stmt)
+                    raw_job = select_oldest_result.scalars().first()
+                    if not raw_job:
+                        logger.debug(f"No job available in queue {queues}")
+                    else:
+                        # Lock the job
+                        update_claim_stmt = (
+                            update(RawJob)
+                            .where(RawJob.id == raw_job.id)
+                            .values(
+                                status=self.CLAIMED,
+                                claimed_at=p.now_ms,
+                                claimed_by=p.claim_as,
+                            )
+                        )
+                        await session.execute(update_claim_stmt)
+                        await session.commit()
+
+                        job = Job.from_raw_job(raw_job)
+                        job.status = self.CLAIMED
+                        job.claimed_at = datetime.fromtimestamp(
+                            p.before_ms / 1000, timezone.utc
+                        )
+                        job.claimed_by = p.claim_as
+                return job
+                
+            except Exception as e:
+                if is_serialization_failure(e):
+                    if attempt < max_retries - 1:
+                        logger.warning(
+                            f"Serialization failure when claiming job, "
+                            f"retrying (attempt {attempt + 1}/{max_retries}): {e}"
+                        )
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    else:
+                        logger.error(
+                            f"Failed to claim job after {max_retries} retries: {e}"
+                        )
+                        raise
+                else:
+                    # For other exceptions, don't retry
+                    raise
+        
+        return None
 
     async def unclaim(self, job_id: UUID) -> bool:
         """Release the claim on a job.

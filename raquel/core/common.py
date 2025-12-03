@@ -3,6 +3,8 @@ from datetime import datetime, timezone, timedelta
 from uuid import UUID
 from typing import Any
 
+from sqlalchemy.exc import OperationalError, DBAPIError
+
 from raquel.core.base import BaseRaquel
 from raquel.models.base_job import BaseJob
 from raquel.models.params import EnqueueParams, ClaimParams
@@ -26,6 +28,37 @@ def validate_claim_as(claim_as: str) -> None:
 def validate_status(status: str) -> None:
     if status is not None and not isinstance(status, str):
         raise ValueError("Status must be a string")
+
+
+def is_serialization_failure(exc: Exception) -> bool:
+    """Check if the exception is a serialization failure that should be retried.
+    
+    This handles CockroachDB and PostgreSQL serialization failures that occur
+    when concurrent transactions conflict. These errors should be retried at
+    the transaction level (not the job level).
+    
+    Args:
+        exc: The exception to check
+        
+    Returns:
+        True if this is a retryable serialization failure
+    """
+    if isinstance(exc, (OperationalError, DBAPIError)):
+        # Check for CockroachDB serialization errors
+        error_str = str(exc).lower()
+        if 'serializationfailure' in error_str or 'restart transaction' in error_str:
+            return True
+        # Check for PostgreSQL serialization errors
+        if 'could not serialize access' in error_str:
+            return True
+        # Check the original exception if available (psycopg2 style)
+        if hasattr(exc, 'orig') and exc.orig:
+            orig_str = str(exc.orig).lower()
+            if 'serializationfailure' in orig_str or 'restart transaction' in orig_str:
+                return True
+            if 'could not serialize access' in orig_str:
+                return True
+    return False
 
 
 def parse_enqueue_params(

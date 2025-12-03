@@ -26,6 +26,7 @@ from raquel.models.job import Job, RawJob
 from raquel.models.queue_stats import QueueStats
 from raquel.models.base_sql import BaseSQL
 from raquel.core.base import BaseRaquel, StopSubscription, DecoratedCallable
+from raquel.core.common import is_serialization_failure
 from raquel.core import common
 
 
@@ -271,8 +272,33 @@ class DequeueContextManager:
                     self.job.id, self.attempt_num, finished_at_ms
                 )
 
-        self.session.execute(stmt)
-        self.session.commit()
+        # Retry the transaction on serialization failures (CockroachDB, PostgreSQL)
+        max_retries = 3
+        retry_delay = 0.1  # Start with 100ms
+        for attempt in range(max_retries):
+            try:
+                self.session.execute(stmt)
+                self.session.commit()
+                break  # Success, exit the retry loop
+            except Exception as e:
+                if is_serialization_failure(e):
+                    self.session.rollback()
+                    if attempt < max_retries - 1:
+                        logger.warning(
+                            f"Serialization failure when updating job {self.job.id}, "
+                            f"retrying (attempt {attempt + 1}/{max_retries}): {e}"
+                        )
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    else:
+                        logger.error(
+                            f"Failed to update job {self.job.id} after {max_retries} retries: {e}"
+                        )
+                        raise
+                else:
+                    # For other exceptions, don't retry
+                    raise
+        
         self.session.close()
 
         # An option to force-quit the subscribe() loop if an unhandled
@@ -705,57 +731,84 @@ class Raquel(BaseRaquel):
         p = common.parse_claim_params(
             *queues, before=before, claim_as=claim_as
         )
-        # Retrieve the earliest scheduled job in the queue and lock the row.
-        with Session(self.engine) as session:
-            where_clause = (
-                or_(
-                    RawJob.status.in_([self.QUEUED, self.FAILED]),
-                    and_(
-                        RawJob.status == self.CLAIMED,
-                        RawJob.claimed_at + reclaim_after <= p.now_ms,
-                    ),
-                ),
-                RawJob.scheduled_at <= p.before_ms,
-                or_(
-                    RawJob.max_age.is_(None),
-                    RawJob.enqueued_at + RawJob.max_age >= p.now_ms,
-                ),
-            )
-            if p.queues:
-                where_clause = (RawJob.queue.in_(p.queues),) + where_clause
+        
+        # Retry the transaction on serialization failures
+        max_retries = 3
+        retry_delay = 0.1  # Start with 100ms
+        
+        for attempt in range(max_retries):
+            try:
+                # Retrieve the earliest scheduled job in the queue and lock the row.
+                with Session(self.engine) as session:
+                    where_clause = (
+                        or_(
+                            RawJob.status.in_([self.QUEUED, self.FAILED]),
+                            and_(
+                                RawJob.status == self.CLAIMED,
+                                RawJob.claimed_at + reclaim_after <= p.now_ms,
+                            ),
+                        ),
+                        RawJob.scheduled_at <= p.before_ms,
+                        or_(
+                            RawJob.max_age.is_(None),
+                            RawJob.enqueued_at + RawJob.max_age >= p.now_ms,
+                        ),
+                    )
+                    if p.queues:
+                        where_clause = (RawJob.queue.in_(p.queues),) + where_clause
 
-            select_oldest_stmt = (
-                select(RawJob)
-                .where(*where_clause)
-                .order_by(RawJob.scheduled_at)
-                .limit(1)
-                .with_for_update(skip_locked=True)
-            )
-            raw_job = session.execute(select_oldest_stmt).scalars().first()
-            if not raw_job:
-                logger.debug(f"No job available in queue {p.queues}")
-                return None
+                    select_oldest_stmt = (
+                        select(RawJob)
+                        .where(*where_clause)
+                        .order_by(RawJob.scheduled_at)
+                        .limit(1)
+                        .with_for_update(skip_locked=True)
+                    )
+                    raw_job = session.execute(select_oldest_stmt).scalars().first()
+                    if not raw_job:
+                        logger.debug(f"No job available in queue {p.queues}")
+                        return None
 
-            # Lock the job
-            update_claim_stmt = (
-                update(RawJob)
-                .where(RawJob.id == raw_job.id)
-                .values(
-                    status=self.CLAIMED,
-                    claimed_at=p.now_ms,
-                    claimed_by=p.claim_as,
-                )
-            )
-            session.execute(update_claim_stmt)
-            session.commit()
+                    # Lock the job
+                    update_claim_stmt = (
+                        update(RawJob)
+                        .where(RawJob.id == raw_job.id)
+                        .values(
+                            status=self.CLAIMED,
+                            claimed_at=p.now_ms,
+                            claimed_by=p.claim_as,
+                        )
+                    )
+                    session.execute(update_claim_stmt)
+                    session.commit()
 
-            job = Job.from_raw_job(raw_job)
-            job.status = self.CLAIMED
-            job.claimed_at = datetime.fromtimestamp(
-                p.before_ms / 1000, timezone.utc
-            )
-            job.claimed_by = p.claim_as
-            return job
+                    job = Job.from_raw_job(raw_job)
+                    job.status = self.CLAIMED
+                    job.claimed_at = datetime.fromtimestamp(
+                        p.before_ms / 1000, timezone.utc
+                    )
+                    job.claimed_by = p.claim_as
+                    return job
+                    
+            except Exception as e:
+                if is_serialization_failure(e):
+                    if attempt < max_retries - 1:
+                        logger.warning(
+                            f"Serialization failure when claiming job, "
+                            f"retrying (attempt {attempt + 1}/{max_retries}): {e}"
+                        )
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    else:
+                        logger.error(
+                            f"Failed to claim job after {max_retries} retries: {e}"
+                        )
+                        raise
+                else:
+                    # For other exceptions, don't retry
+                    raise
+        
+        return None
 
     def unclaim(self, job_id: UUID) -> bool:
         """Release the claim on a job.
