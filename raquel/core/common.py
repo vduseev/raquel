@@ -76,7 +76,7 @@ def parse_enqueue_params(
     serialized_payload = None
     if isinstance(payload, str):
         serialized_payload = payload
-    elif payload and not isinstance(payload, str):
+    elif payload is not None:
         serialized_payload = json.dumps(payload)
 
     # Convert config

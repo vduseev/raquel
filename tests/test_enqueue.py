@@ -337,6 +337,16 @@ async def test_str_payload_enqueue_async(rq_asyncpg: AsyncRaquel):
     assert job.payload == "foo"
 
 
+def test_falsy_payload_enqueue(rq_sqlite: Raquel):
+    for payload in (0, False, [], {}):
+        job = rq_sqlite.enqueue("default", payload)
+
+        stored_payload = rq_sqlite.get(job.id).payload
+        # 0 == False in Python, so check the type as well
+        assert stored_payload == payload
+        assert type(stored_payload) is type(payload)
+
+
 def test_job_object_payload_enqueue(rq_sqlite: Raquel):
     job = Job(
         queue="job_queue",
