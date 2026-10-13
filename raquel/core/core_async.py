@@ -266,11 +266,12 @@ class AsyncDequeueContextManager:
                     self.job.id, self.attempt_num
                 )
             elif self.job._rescheduled:
-                # Reschedule the job for later
+                # Reschedule the job for later. It wasn't processed, so
+                # this attempt doesn't count.
                 stmt = self.broker._reschedule_statement(
                     self.job,
                     self.job._rescheduled_at,
-                    attempt_num=self.attempt_num,
+                    attempt_num=self.job.attempts,
                 )
             else:
                 # Update the job status to "success"

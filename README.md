@@ -193,7 +193,7 @@ with rq.dequeue("my-queue") as job:
 When you reschedule a job, its `scheduled_at` field is either updated with
 the new `at` and `delay` values or left unchanged. And the `finished_at` field
 is cleared. If the `Job` object had any `error` or `error_trace` values, they
-are saved to the database. The `attempts` field is incremented.
+are saved to the database. The `attempts` field stays the same.
 
 Here are some fancy ways to reschedule a job using `reschedule()`:
 

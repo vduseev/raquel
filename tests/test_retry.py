@@ -189,3 +189,20 @@ async def test_min_max_retry_delay_timedelta_dequeue_async(rq_asyncpg: AsyncRaqu
         assert job.payload == {"foo": "bar"}
         assert job.status == rq_asyncpg.CLAIMED
         assert job.attempts == 1
+
+
+def test_reschedule_does_not_count_as_attempt(rq_sqlite: Raquel):
+    job = rq_sqlite.enqueue(payload="not ready", max_retry_count=2)
+
+    # Rescheduling doesn't use up the retries
+    for _ in range(3):
+        with rq_sqlite.dequeue() as dequeued_job:
+            dequeued_job.reschedule(delay=0)
+    assert rq_sqlite.get(job.id).attempts == 0
+
+    with rq_sqlite.dequeue() as dequeued_job:
+        raise RuntimeError("Something went wrong")
+
+    updated_job = rq_sqlite.get(job.id)
+    assert updated_job.status == rq_sqlite.FAILED
+    assert updated_job.attempts == 1
