@@ -27,7 +27,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
     "Topic :: System :: Distributed Computing",
 ]
-dependencies = ["sqlalchemy~=2.0"]
+dependencies = ["sqlalchemy~=2.0", "typing-extensions>=4.6"]
 
 [project.optional-dependencies]
 asyncio = ["greenlet~=3.0"]
@@ -43,6 +43,7 @@ test = [
     "psycopg2-binary~=2.9",
     "asyncpg~=0.30",
     "pytest-asyncio~=0.24",
+    "pydantic~=2.0",
 ]
 dev = [
     "bump-my-version>=1.1.4",

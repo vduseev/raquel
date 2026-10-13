@@ -33,6 +33,7 @@ Table of contents
   * [Reschedule jobs](#reschedule-jobs)
   * [Reject jobs](#reject-jobs)
   * [Async support](#async-support)
+  * [Typed payloads](#typed-payloads)
   * [Stats](#stats)
 * [How it works](#how-it-works)
   * [Jobs table](#jobs-table)
@@ -278,6 +279,56 @@ async def main():
 
 asyncio.run(main())
 ```
+
+### Typed payloads
+
+A payload can be a Pydantic model, a dataclass, or an instance of any other
+class. Raquel stores it as JSON:
+
+```python
+from pydantic import BaseModel
+
+class Notification(BaseModel):
+    user_id: int
+    message: str
+
+rq.enqueue("notifications", Notification(user_id=1, message="Hi!"))
+```
+
+To get the object back, annotate the job with the payload type. That's
+all it takes for workers subscribed with `subscribe()`:
+
+```python
+from raquel import Job
+
+@rq.subscribe("notifications")
+def notify(job: Job[Notification]) -> None:
+    # job.payload is a Notification, and your type checker knows it
+    send(job.payload.user_id, job.payload.message)
+```
+
+With `dequeue()`, pass the type explicitly:
+
+```python
+with rq.dequeue("notifications", payload_type=Notification) as job:
+    if job:
+        send(job.payload.user_id, job.payload.message)
+```
+
+Here is how the JSON is turned back into an object:
+
+* Pydantic models are validated with `model_validate()`.
+* Any other class, including dataclasses, is called with the fields of the
+  JSON object as keyword arguments: `Notification(**payload)`. Any other
+  JSON value is passed as a single argument: `UUID(payload)`.
+
+Raquel doesn't validate dataclasses or build nested objects for them: if
+a dataclass field holds another dataclass, you get a `dict` there. Use
+a Pydantic model when you need that.
+
+If the payload doesn't fit its type, the job fails just as if your code had
+raised an exception: the error is saved, the job is retried later, and your
+code doesn't receive the job.
 
 ### Stats
 

@@ -2,7 +2,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
 from uuid import UUID
-from typing import Any, Callable, Awaitable, Iterable
+from typing import Any, Callable, Awaitable, Generic, Iterable
 
 from sqlalchemy import (
     case,
@@ -23,7 +23,8 @@ from sqlalchemy.sql import func
 from sqlalchemy.engine.url import URL
 
 from raquel.models.base_job import JobStatusValueType
-from raquel.models.job import Job, RawJob
+from raquel.models.job import Job, PayloadT, RawJob
+from raquel.models.payload import load_payload, payload_class
 from raquel.models.queue_stats import QueueStats
 from raquel.models.base_sql import BaseSQL
 from raquel.core.base import BaseRaquel, StopSubscription, DecoratedCallable
@@ -53,6 +54,7 @@ class AsyncSubscription:
         self.sleep = sleep
         self.raise_stop_on_unhandled_exc = raise_stop_on_unhandled_exc
         self.reclaim_after = reclaim_after
+        self.payload_type = common.payload_type_of(fn)
         self.stop_event = asyncio.Event()        
 
     async def run(self) -> None:
@@ -74,6 +76,7 @@ class AsyncSubscription:
                     expire=self.expire,
                     raise_stop_on_unhandled_exc=self.raise_stop_on_unhandled_exc,
                     reclaim_after=self.reclaim_after,
+                    payload_type=self.payload_type,
                 ) as job:
                     if job:
                         await self.fn(job)
@@ -105,7 +108,7 @@ class AsyncSubscription:
         self.stop_event.set()
 
 
-class AsyncDequeueContextManager:
+class AsyncDequeueContextManager(Generic[PayloadT]):
     def __init__(
         self,
         broker: "AsyncRaquel",
@@ -115,6 +118,7 @@ class AsyncDequeueContextManager:
         expire: bool = True,
         raise_stop_on_unhandled_exc: bool = False,
         reclaim_after: int = 60 * 1000,
+        payload_type: type[PayloadT] | None = None,
     ) -> None:
         self.broker = broker
         self.queues = queues
@@ -123,13 +127,14 @@ class AsyncDequeueContextManager:
         self.expire = expire
         self.raise_stop_on_unhandled_exc = raise_stop_on_unhandled_exc
         self.reclaim_after = reclaim_after
+        self.payload_class = payload_class(payload_type)
 
-        self.job: Job | None = None
+        self.job: Job[PayloadT] | None = None
         self.session: AsyncSession | None = None
         self.exception: Exception | None = None
         self.attempt_num: int = 0
 
-    async def __aenter__(self) -> Job | None:
+    async def __aenter__(self) -> Job[PayloadT] | None:
         # Cancel any expired jobs before attempting to acquire a new job
         if self.expire:
             await self.broker.expire(*self.queues)
@@ -155,6 +160,19 @@ class AsyncDequeueContextManager:
 
         # Increment the number of attempts
         self.attempt_num = self.job.attempts + 1
+
+        # Build the payload object. A payload that doesn't fit its type
+        # fails the job just like an exception raised by the caller would,
+        # except the caller never gets the job.
+        if self.payload_class:
+            try:
+                self.job.payload = load_payload(
+                    self.job.payload, self.payload_class
+                )
+            except Exception as e:
+                await self.__aexit__(type(e), e, e.__traceback__)
+                self.job = None
+                return None
 
         # Yield the job to the caller. At this point, the job is
         # being processed by the caller code.
@@ -457,7 +475,10 @@ class AsyncRaquel(BaseRaquel):
 
         The first and only argument of the callback function should always be
         a ``Job``, which will be passed by the subscription for every new job
-        that arrives.
+        that arrives. Annotate it with the payload type, as in
+        ``job: Job[MyPayload]``, to receive the payload as a ``MyPayload``
+        object. If the payload doesn't fit, the job fails without reaching
+        the callback.
 
         Examples:
             Subscribe a function to the "default" queue
@@ -465,6 +486,11 @@ class AsyncRaquel(BaseRaquel):
             ...     print(f"All good: {job.payload}")
             >>> subscription = rq.add_subscription(process_job, "default")
             >>> await subscription.run()
+
+            Receive payloads as ``MyPayload`` objects
+            >>> async def process_typed_job(job: Job[MyPayload]) -> None:
+            ...     print(f"All good: {job.payload.name}")
+            >>> rq.add_subscription(process_typed_job, "default")
 
         Args:
             fn (DecoratedCallable): Callback function to process jobs.
@@ -524,7 +550,10 @@ class AsyncRaquel(BaseRaquel):
 
         The first and only argument of the decorated function should always be
         a ``Job``, which will be passed by the subscription for every new job
-        that arrives.
+        that arrives. Annotate it with the payload type, as in
+        ``job: Job[MyPayload]``, to receive the payload as a ``MyPayload``
+        object. If the payload doesn't fit, the job fails without reaching
+        the function.
 
         Examples:
 
@@ -532,6 +561,11 @@ class AsyncRaquel(BaseRaquel):
             >>> @rq.subscribe("default", "high-priority", claim_as="worker-1"):
             ... async def process_job(job) -> None:
             ...     print(f"All good: {job.payload}")
+
+            Receive payloads as ``MyPayload`` objects
+            >>> @rq.subscribe("default"):
+            ... async def process_typed_job(job: Job[MyPayload]) -> None:
+            ...     print(f"All good: {job.payload.name}")
 
             Launch all subscriptions
             >>> rq.run_subscriptions()
@@ -598,7 +632,8 @@ class AsyncRaquel(BaseRaquel):
         expire: bool = True,
         raise_stop_on_unhandled_exc: bool = False,
         reclaim_after: int = 60 * 1000,
-    ) -> AsyncDequeueContextManager:
+        payload_type: type[PayloadT] | None = None,
+    ) -> AsyncDequeueContextManager[PayloadT]:
         """Take the oldest job and process it inside a context manager.
 
         It updates the job status to "claimed" and starts the processing
@@ -623,6 +658,11 @@ class AsyncRaquel(BaseRaquel):
             ...             print("Job processed successfully")
             ...     asyncio.sleep(1)
 
+            Build the payload as a ``MyPayload`` object
+            >>> async with rq.dequeue("tasks", payload_type=MyPayload) as job:
+            ...     if job:
+            ...         print(job.payload.name)
+
         Args:
             queues (str): One or more queue names.
             before (datetime | int | None): Look for jobs scheduled at or
@@ -635,6 +675,10 @@ class AsyncRaquel(BaseRaquel):
             raise_stop_on_unhandled_exc (bool): Raise a ``StopSubscription``
                 exception if an unhandled exception occurs while processing
                 the job. Defaults to False.
+            payload_type (type | None): Class to build the payload with:
+                a Pydantic model, a dataclass, or any other class. If the
+                payload doesn't fit, the job fails and None is yielded
+                instead. Defaults to None, which leaves the payload as is.
 
         Yields:
             (Job | None): The oldest job in the queue or None if no job is available.
@@ -647,6 +691,7 @@ class AsyncRaquel(BaseRaquel):
             expire=expire,
             raise_stop_on_unhandled_exc=raise_stop_on_unhandled_exc,
             reclaim_after=reclaim_after,
+            payload_type=payload_type,
         )
 
     async def claim(
