@@ -88,3 +88,44 @@ async def test_nested_cancel_async(rq_asyncpg: AsyncRaquel):
 
     updated_job = await rq_asyncpg.get(job.id)
     assert updated_job.status == rq_asyncpg.SUCCESS
+
+
+def test_concurrent_claim_sqlite(tmp_path):
+    # SQLite has no row locks, so concurrent workers can select the same job.
+    # Only one of them may claim it.
+    rq = Raquel(f"sqlite:///{tmp_path / 'jobs.db'}")
+    rq.create_all()
+    for i in range(1, 101):
+        rq.enqueue("concurrent_claim", i)
+
+    claimed = []
+
+    def claim_all():
+        while job := rq.claim("concurrent_claim"):
+            claimed.append(job.payload)
+
+    threads = [threading.Thread(target=claim_all) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert sorted(claimed) == list(range(1, 101))
+
+
+@pytest.mark.asyncio
+async def test_concurrent_claim_sqlite_async(tmp_path):
+    rq = AsyncRaquel(f"sqlite+aiosqlite:///{tmp_path / 'jobs.db'}")
+    await rq.create_all()
+    for i in range(1, 101):
+        await rq.enqueue("concurrent_claim", i)
+
+    claimed = []
+
+    async def claim_all():
+        while job := await rq.claim("concurrent_claim"):
+            claimed.append(job.payload)
+
+    await asyncio.gather(*(claim_all() for _ in range(8)))
+
+    assert sorted(claimed) == list(range(1, 101))

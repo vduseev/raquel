@@ -717,18 +717,27 @@ class AsyncRaquel(BaseRaquel):
             if not raw_job:
                 logger.debug(f"No job available in queue {queues}")
             else:
-                # Lock the job
+                # Claim the job, unless another worker claimed it since we
+                # selected it, which can happen in databases without row
+                # locks, such as SQLite. Then look for another job.
                 update_claim_stmt = (
                     update(RawJob)
-                    .where(RawJob.id == raw_job.id)
+                    .where(RawJob.id == raw_job.id, *where_clause)
                     .values(
                         status=self.CLAIMED,
                         claimed_at=p.now_ms,
                         claimed_by=p.claim_as,
                     )
                 )
-                await session.execute(update_claim_stmt)
+                result = await session.execute(update_claim_stmt)
                 await session.commit()
+                if result.rowcount != 1:
+                    return await self.claim(
+                        *queues,
+                        before=before,
+                        claim_as=claim_as,
+                        reclaim_after=reclaim_after,
+                    )
 
                 job = Job.from_raw_job(raw_job)
                 job.status = self.CLAIMED
