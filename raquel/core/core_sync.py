@@ -230,7 +230,7 @@ class DequeueContextManager:
         if self.job._failed:
             if (
                 self.job.max_retry_count is not None
-                and self.attempt_num + 1 > self.job.max_retry_count
+                and self.attempt_num > self.job.max_retry_count
             ):
                 # Do not retry a job that has exceeded the maximum number
                 # of retries.

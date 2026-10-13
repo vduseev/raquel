@@ -239,7 +239,7 @@ class AsyncDequeueContextManager:
             # of retries.
             if (
                 self.job.max_retry_count is not None
-                and self.attempt_num + 1 > self.job.max_retry_count
+                and self.attempt_num > self.job.max_retry_count
             ):
                 logger.debug(
                     f"Job {self.job.id} has exceeded the maximum number of retries ({self.job.max_retry_count})"
