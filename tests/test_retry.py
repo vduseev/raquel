@@ -1,6 +1,6 @@
 import asyncio
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -189,3 +189,33 @@ async def test_min_max_retry_delay_timedelta_dequeue_async(rq_asyncpg: AsyncRaqu
         assert job.payload == {"foo": "bar"}
         assert job.status == rq_asyncpg.CLAIMED
         assert job.attempts == 1
+
+
+@pytest.mark.parametrize("max_retry_count", [0, 1, 3])
+def test_max_retry_count(rq_sqlite: Raquel, max_retry_count: int):
+    job = rq_sqlite.enqueue(payload="x", max_retry_count=max_retry_count)
+    later = datetime.now(timezone.utc) + timedelta(days=1)
+
+    # The first attempt and every retry fail
+    for _ in range(max_retry_count + 1):
+        with rq_sqlite.dequeue(before=later):
+            raise RuntimeError("Something went wrong")
+
+    updated_job = rq_sqlite.get(job.id)
+    assert updated_job.status == rq_sqlite.EXHAUSTED
+    assert updated_job.attempts == max_retry_count + 1
+    assert not rq_sqlite.claim(before=later)
+
+
+@pytest.mark.asyncio
+async def test_max_retry_count_async(rq_asyncpg: AsyncRaquel):
+    job = await rq_asyncpg.enqueue(payload="x", max_retry_count=1)
+    later = datetime.now(timezone.utc) + timedelta(days=1)
+
+    for _ in range(2):
+        async with rq_asyncpg.dequeue(before=later):
+            raise RuntimeError("Something went wrong")
+
+    updated_job = await rq_asyncpg.get(job.id)
+    assert updated_job.status == rq_asyncpg.EXHAUSTED
+    assert updated_job.attempts == 2
