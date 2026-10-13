@@ -1,6 +1,7 @@
 import asyncio
 import multiprocessing
 import time
+from multiprocessing.synchronize import Event
 
 import pytest
 from raquel import AsyncRaquel, Raquel
@@ -8,10 +9,15 @@ from raquel import AsyncRaquel, Raquel
 from .fixtures import rq_asyncpg, rq_psycopg2
 
 
-def dequeue_in_another_process(dsn: str):
+def dequeue_in_another_process(dsn: str, row_locked: Event):
     # Independent process, needs its own instance
     rq = Raquel(dsn)
     with rq.dequeue("reclaim_killed_worker", claim_as="worker-1") as job:
+        if job is None:
+            return
+        # dequeue() commits the claim first and locks the row afterwards.
+        # Only inside this block is the row guaranteed to be locked.
+        row_locked.set()
         time.sleep(10)  # Simulate long processing time
 
 
@@ -26,25 +32,21 @@ def test_reclaim_unlocked_row(rq_psycopg2: Raquel, postgres_dsn_sync: str):
     job = rq_psycopg2.enqueue("reclaim_killed_worker", 1)
 
     # Start the process that will dequeue the job and lock the row
+    row_locked = multiprocessing.Event()
     dequeue_process = multiprocessing.Process(
         target=dequeue_in_another_process,
-        args=(postgres_dsn_sync,),
+        args=(postgres_dsn_sync, row_locked),
     )
     dequeue_process.start()
 
-    # Wait until the job is claimed by that other process
-    wait_counter = 0
-    while True:
-        updated_job = rq_psycopg2.get(job.id)
-        if (
-            updated_job.status == rq_psycopg2.CLAIMED
-            and updated_job.claimed_by == "worker-1"
-        ):
-            break
-        wait_counter += 1
-        if wait_counter > 100:
-            raise Exception("Job was not claimed by the other process")
-        time.sleep(0.01)
+    # Wait until the job is claimed by that other process and its row is
+    # locked. Polling the job status is not enough: the status becomes
+    # claimed before the row lock is taken.
+    if not row_locked.wait(timeout=10):
+        raise Exception("Job was not claimed by the other process")
+    updated_job = rq_psycopg2.get(job.id)
+    assert updated_job.status == rq_psycopg2.CLAIMED
+    assert updated_job.claimed_by == "worker-1"
 
     # Now try to claim the job within this process. It should fail because the
     # row is locked.
@@ -83,25 +85,21 @@ async def test_reclaim_unlocked_row_async(rq_asyncpg: AsyncRaquel, postgres_dsn_
     job = await rq_asyncpg.enqueue("reclaim_killed_worker", 1)
 
     # Start the process that will dequeue the job and lock the row
+    row_locked = multiprocessing.Event()
     dequeue_process = multiprocessing.Process(
         target=dequeue_in_another_process,
-        args=(postgres_dsn_sync,),
+        args=(postgres_dsn_sync, row_locked),
     )
     dequeue_process.start()
 
-    # Wait until the job is claimed by that other process
-    wait_counter = 0
-    while True:
-        updated_job = await rq_asyncpg.get(job.id)
-        if (
-            updated_job.status == rq_asyncpg.CLAIMED
-            and updated_job.claimed_by == "worker-1"
-        ):
-            break
-        wait_counter += 1
-        if wait_counter > 100:
-            raise Exception("Job was not claimed by the other process")
-        await asyncio.sleep(0.01)
+    # Wait until the job is claimed by that other process and its row is
+    # locked. Polling the job status is not enough: the status becomes
+    # claimed before the row lock is taken.
+    if not await asyncio.to_thread(row_locked.wait, 10):
+        raise Exception("Job was not claimed by the other process")
+    updated_job = await rq_asyncpg.get(job.id)
+    assert updated_job.status == rq_asyncpg.CLAIMED
+    assert updated_job.claimed_by == "worker-1"
 
     # Now try to claim the job within this process. It should fail because the
     # row is locked.
