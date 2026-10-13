@@ -136,6 +136,9 @@ while True:
 The `dequeue()` will find the next job and claim it. It will also handle
 the job status, exceptions, retries and everything else automatically.
 
+Jobs are picked up in the order they are scheduled, oldest first. Pass
+`newest_first=True` to take the most recently scheduled job instead (LIFO).
+
 ### Failed jobs
 
 Jobs are retried when they fail. When an exception is caught by the

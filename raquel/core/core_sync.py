@@ -43,6 +43,7 @@ class Subscription:
         sleep: int = 1000,
         raise_stop_on_unhandled_exc: bool = False,
         reclaim_after: int = 60 * 1000,
+        newest_first: bool = False,
     ) -> None:
         self.fn = fn
         self.broker = broker
@@ -52,6 +53,7 @@ class Subscription:
         self.sleep = sleep
         self.raise_stop_on_unhandled_exc = raise_stop_on_unhandled_exc
         self.reclaim_after = reclaim_after
+        self.newest_first = newest_first
         self.stop_event = Event()
 
     def run(self) -> None:
@@ -73,6 +75,7 @@ class Subscription:
                     expire=self.expire,
                     raise_stop_on_unhandled_exc=self.raise_stop_on_unhandled_exc,
                     reclaim_after=self.reclaim_after,
+                    newest_first=self.newest_first,
                 ) as job:
                     if job:
                         self.fn(job)
@@ -109,6 +112,7 @@ class DequeueContextManager:
         expire: bool = True,
         raise_stop_on_unhandled_exc: bool = False,
         reclaim_after: int = 60 * 1000,
+        newest_first: bool = False,
     ) -> None:
         self.broker = broker
         self.queues = queues
@@ -117,6 +121,7 @@ class DequeueContextManager:
         self.expire = expire
         self.raise_stop_on_unhandled_exc = raise_stop_on_unhandled_exc
         self.reclaim_after = reclaim_after
+        self.newest_first = newest_first
 
         self.job: Job | None = None
         self.session: Session | None = None
@@ -134,6 +139,7 @@ class DequeueContextManager:
             before=self.before,
             claim_as=self.claim_as,
             reclaim_after=self.reclaim_after,
+            newest_first=self.newest_first,
         )
 
         if not self.job:
@@ -436,6 +442,7 @@ class Raquel(BaseRaquel):
         sleep: int = 1000,
         raise_stop_on_unhandled_exc: bool = False,
         reclaim_after: int = 60 * 1000,
+        newest_first: bool = False,
     ) -> Subscription:
         """This is an experimental API. Subject to change.
         
@@ -474,6 +481,8 @@ class Raquel(BaseRaquel):
                 wasn't processed and the row remains unlocked, then it can
                 be reclaimed after this delay. The delay is calculated from
                 the previous ``claimed_at`` time. Defaults to 1 minute.
+            newest_first (bool): Take the most recently scheduled job
+                first (LIFO) instead of the oldest one. Defaults to False.
 
         Returns:
             Subscription: The subscription object.
@@ -490,6 +499,7 @@ class Raquel(BaseRaquel):
             sleep=sleep,
             raise_stop_on_unhandled_exc=raise_stop_on_unhandled_exc,
             reclaim_after=reclaim_after,
+            newest_first=newest_first,
         )
         self.subscriptions.append(subscription) 
         return subscription
@@ -502,6 +512,7 @@ class Raquel(BaseRaquel):
         sleep: int = 1000,
         raise_stop_on_unhandled_exc: bool = False,
         reclaim_after: int = 60 * 1000,
+        newest_first: bool = False,
     ) -> Callable[[DecoratedCallable], DecoratedCallable]:
         """This is an experimental API. Subject to change.
 
@@ -550,6 +561,8 @@ class Raquel(BaseRaquel):
                 wasn't processed and the row remains unlocked, then it can
                 be reclaimed after this delay. The delay is calculated from
                 the previous ``claimed_at`` time. Defaults to 1 minute.
+            newest_first (bool): Take the most recently scheduled job
+                first (LIFO) instead of the oldest one. Defaults to False.
         """
 
         def decorator(fn: DecoratedCallable) -> DecoratedCallable:
@@ -561,6 +574,7 @@ class Raquel(BaseRaquel):
                 sleep=sleep,
                 raise_stop_on_unhandled_exc=raise_stop_on_unhandled_exc,
                 reclaim_after=reclaim_after,
+                newest_first=newest_first,
             )
             return fn
         return decorator
@@ -613,6 +627,7 @@ class Raquel(BaseRaquel):
         expire: bool = True,
         raise_stop_on_unhandled_exc: bool = False,
         reclaim_after: int = 60 * 1000,
+        newest_first: bool = False,
     ) -> DequeueContextManager:
         """Take the oldest job and process it inside a context manager.
 
@@ -655,6 +670,8 @@ class Raquel(BaseRaquel):
                 wasn't processed and the row remains unlocked, then it can
                 be reclaimed after this delay. The delay is calculated from
                 the previous ``claimed_at`` time. Defaults to 1 minute.
+            newest_first (bool): Take the most recently scheduled job
+                first (LIFO) instead of the oldest one. Defaults to False.
 
         Yields:
             (Job | None): The oldest job in the queue or None if no job is available.
@@ -667,6 +684,7 @@ class Raquel(BaseRaquel):
             expire=expire,
             raise_stop_on_unhandled_exc=raise_stop_on_unhandled_exc,
             reclaim_after=reclaim_after,
+            newest_first=newest_first,
         )
 
     def claim(
@@ -675,6 +693,7 @@ class Raquel(BaseRaquel):
         before: datetime | int | None = None,
         claim_as: str | None = None,
         reclaim_after: int = 60 * 1000,
+        newest_first: bool = False,
     ) -> Job | None:
         """Claim the oldest job in the queue and lock it for processing.
 
@@ -698,6 +717,8 @@ class Raquel(BaseRaquel):
                 wasn't processed and the row remains unlocked, then it can
                 be reclaimed after this delay. The delay is calculated from
                 the previous ``claimed_at`` time. Defaults to 1 minute.
+            newest_first (bool): Take the most recently scheduled job
+                first (LIFO) instead of the oldest one. Defaults to False.
 
         Returns:
             (Job | None): The acquired job or None if no job is available.
@@ -727,7 +748,11 @@ class Raquel(BaseRaquel):
             select_oldest_stmt = (
                 select(RawJob)
                 .where(*where_clause)
-                .order_by(RawJob.scheduled_at)
+                .order_by(
+                    desc(RawJob.scheduled_at)
+                    if newest_first
+                    else RawJob.scheduled_at
+                )
                 .limit(1)
                 .with_for_update(skip_locked=True)
             )

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -130,6 +130,36 @@ async def test_dequeue_in_order_async(rq_asyncpg: AsyncRaquel):
     assert await rq_asyncpg.count("default", rq_asyncpg.CLAIMED) == 0
     assert await rq_asyncpg.count("default", rq_asyncpg.SUCCESS) == 2
 
+
+def test_dequeue_newest_first(rq_sqlite: Raquel):
+    now = datetime.now(timezone.utc)
+    for seconds_ago in (3, 1, 2):
+        at = now - timedelta(seconds=seconds_ago)
+        rq_sqlite.enqueue("default", seconds_ago, at=at)
+    # Jobs scheduled in the future are not due yet
+    rq_sqlite.enqueue("default", -1, at=now + timedelta(hours=1))
+
+    with rq_sqlite.dequeue("default", newest_first=True) as job:
+        assert job.payload == 1
+    with rq_sqlite.dequeue("default") as job:
+        assert job.payload == 3
+    with rq_sqlite.dequeue("default", newest_first=True) as job:
+        assert job.payload == 2
+    with rq_sqlite.dequeue("default", newest_first=True) as job:
+        assert job is None
+
+
+@pytest.mark.asyncio
+async def test_dequeue_newest_first_async(rq_asyncpg: AsyncRaquel):
+    now = datetime.now(timezone.utc)
+    for seconds_ago in (3, 1, 2):
+        at = now - timedelta(seconds=seconds_ago)
+        await rq_asyncpg.enqueue("default", seconds_ago, at=at)
+
+    async with rq_asyncpg.dequeue("default", newest_first=True) as job:
+        assert job.payload == 1
+    async with rq_asyncpg.dequeue("default") as job:
+        assert job.payload == 3
 
 def test_reject(rq_sqlite: Raquel):
     enqueued_job = rq_sqlite.enqueue("default", {"foo": "bar"})
