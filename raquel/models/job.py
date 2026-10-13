@@ -4,7 +4,9 @@ import traceback
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4, UUID
-from typing import Any
+from typing import Any, Generic, cast
+
+from typing_extensions import TypeVar
 
 from .base_job import BaseJob, JobStatusValueType
 from .raw_job import RawJob
@@ -12,9 +14,11 @@ from .raw_job import RawJob
 
 logger = logging.getLogger(__name__)
 
+PayloadT = TypeVar("PayloadT", default=Any)
+
 
 @dataclass
-class Job(BaseJob):
+class Job(BaseJob, Generic[PayloadT]):
     id: UUID = field(default_factory=uuid4)
     """The unique identifier for the job.
 
@@ -28,8 +32,16 @@ class Job(BaseJob):
     This is generated automatically on the client side."""
     queue: str = field(default="default")
     """The name of the queue that the job belongs to."""
-    payload: Any | None = field(default=None)
-    """The payload of the job."""
+    # Cast, because a job that is constructed without a payload has none,
+    # whatever its payload type is.
+    payload: PayloadT = field(default=cast(Any, None))
+    """The payload of the job.
+
+    Annotate the job with the type of its payload, for example
+    ``Job[MyPayload]``, and ``subscribe()`` builds the payload as
+    a ``MyPayload`` object before passing the job to the worker. Same for
+    ``dequeue(payload_type=MyPayload)``.
+    """
     status: JobStatusValueType | None = field(default=None)
     """The status of the job.
     

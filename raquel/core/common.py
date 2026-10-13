@@ -1,11 +1,19 @@
+import inspect
 import json
+import logging
 from datetime import datetime, timezone, timedelta
 from uuid import UUID
-from typing import Any
+from collections.abc import Callable
+from typing import Any, get_args, get_origin
 
 from raquel.core.base import BaseRaquel
 from raquel.models.base_job import BaseJob
+from raquel.models.job import Job
 from raquel.models.params import EnqueueParams, ClaimParams
+from raquel.models.payload import payload_class, to_json
+
+
+logger = logging.getLogger(__name__)
 
 
 def validate_queue_name(queue: str) -> None:
@@ -26,6 +34,27 @@ def validate_claim_as(claim_as: str) -> None:
 def validate_status(status: str) -> None:
     if status is not None and not isinstance(status, str):
         raise ValueError("Status must be a string")
+
+
+def payload_type_of(fn: Callable[..., Any]) -> type | None:
+    """Get the payload type that ``fn`` expects its job to have.
+
+    It's the type argument of the ``Job[MyPayload]`` annotation of the first
+    parameter. Returns ``None`` if the job is not annotated with one.
+    """
+    try:
+        signature = inspect.signature(fn, eval_str=True)
+    except Exception as e:
+        logger.warning(
+            f"Can't resolve the type annotations of {fn!r}, "
+            f"its job payloads will be passed as is: {e}"
+        )
+        return None
+
+    params = list(signature.parameters.values())
+    if not params or get_origin(params[0].annotation) is not Job:
+        return None
+    return payload_class(get_args(params[0].annotation)[0])
 
 
 def parse_enqueue_params(
@@ -77,7 +106,7 @@ def parse_enqueue_params(
     if isinstance(payload, str):
         serialized_payload = payload
     elif payload and not isinstance(payload, str):
-        serialized_payload = json.dumps(payload)
+        serialized_payload = json.dumps(payload, default=to_json)
 
     # Convert config
     if isinstance(max_age, timedelta):
