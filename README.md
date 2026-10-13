@@ -399,6 +399,35 @@ Here is the schema of the `jobs` table:
 Check out all ways to create the `jobs` table in the
 [Create jobs table](#create-jobs-table) section.
 
+Timestamps and durations are stored as milliseconds and payloads as text, so
+that the table is the same in every database. To work with native types in
+PostgreSQL, for example in analytics queries, create a view:
+
+```sql
+CREATE VIEW jobs_view AS
+SELECT
+    id,
+    queue,
+    payload,
+    status,
+    max_age * INTERVAL '1 millisecond' AS max_age,
+    max_retry_count,
+    min_retry_delay * INTERVAL '1 millisecond' AS min_retry_delay,
+    max_retry_delay * INTERVAL '1 millisecond' AS max_retry_delay,
+    backoff_base * INTERVAL '1 millisecond' AS backoff_base,
+    to_timestamp(enqueued_at / 1000.0) AS enqueued_at,
+    to_timestamp(scheduled_at / 1000.0) AS scheduled_at,
+    attempts,
+    error,
+    error_trace,
+    claimed_by,
+    to_timestamp(claimed_at / 1000.0) AS claimed_at,
+    to_timestamp(finished_at / 1000.0) AS finished_at
+FROM jobs;
+```
+
+If all your payloads are JSON, query them with `payload::jsonb`.
+
 ### Job status
 
 ![Job status](https://raw.githubusercontent.com/vduseev/raquel/master/docs/job_status.png)
