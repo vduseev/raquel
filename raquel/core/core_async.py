@@ -44,6 +44,7 @@ class AsyncSubscription:
         sleep: int = 1000,
         raise_stop_on_unhandled_exc: bool = False,
         reclaim_after: int = 60 * 1000,
+        newest_first: bool = False,
     ) -> None:
         self.fn = fn
         self.broker = broker
@@ -53,6 +54,7 @@ class AsyncSubscription:
         self.sleep = sleep
         self.raise_stop_on_unhandled_exc = raise_stop_on_unhandled_exc
         self.reclaim_after = reclaim_after
+        self.newest_first = newest_first
         self.stop_event = asyncio.Event()        
 
     async def run(self) -> None:
@@ -74,6 +76,7 @@ class AsyncSubscription:
                     expire=self.expire,
                     raise_stop_on_unhandled_exc=self.raise_stop_on_unhandled_exc,
                     reclaim_after=self.reclaim_after,
+                    newest_first=self.newest_first,
                 ) as job:
                     if job:
                         await self.fn(job)
@@ -115,6 +118,7 @@ class AsyncDequeueContextManager:
         expire: bool = True,
         raise_stop_on_unhandled_exc: bool = False,
         reclaim_after: int = 60 * 1000,
+        newest_first: bool = False,
     ) -> None:
         self.broker = broker
         self.queues = queues
@@ -123,6 +127,7 @@ class AsyncDequeueContextManager:
         self.expire = expire
         self.raise_stop_on_unhandled_exc = raise_stop_on_unhandled_exc
         self.reclaim_after = reclaim_after
+        self.newest_first = newest_first
 
         self.job: Job | None = None
         self.session: AsyncSession | None = None
@@ -140,6 +145,7 @@ class AsyncDequeueContextManager:
             before=self.before,
             claim_as=self.claim_as,
             reclaim_after=self.reclaim_after,
+            newest_first=self.newest_first,
         )
 
         if not self.job:
@@ -447,6 +453,7 @@ class AsyncRaquel(BaseRaquel):
         sleep: int = 1000,
         raise_stop_on_unhandled_exc: bool = False,
         reclaim_after: int = 60 * 1000,
+        newest_first: bool = False,
     ) -> AsyncSubscription:
         """This is an experimental API. Subject to change.
         
@@ -484,6 +491,8 @@ class AsyncRaquel(BaseRaquel):
                 wasn't processed and the row remains unlocked, then it can
                 be reclaimed after this delay. The delay is calculated from
                 the previous ``claimed_at`` time. Defaults to 1 minute.
+            newest_first (bool): Take the most recently scheduled job
+                first (LIFO) instead of the oldest one. Defaults to False.
 
         Returns:
             AsyncSubscription: The subscription object.
@@ -500,6 +509,7 @@ class AsyncRaquel(BaseRaquel):
             sleep=sleep,
             raise_stop_on_unhandled_exc=raise_stop_on_unhandled_exc,
             reclaim_after=reclaim_after,
+            newest_first=newest_first,
         )
         self.subscriptions.append(subscription) 
         return subscription
@@ -512,6 +522,7 @@ class AsyncRaquel(BaseRaquel):
         sleep: int = 1000,
         raise_stop_on_unhandled_exc: bool = False,
         reclaim_after: int = 60 * 1000,
+        newest_first: bool = False,
     ) -> Callable[[DecoratedCallable], AsyncSubscription]:
         """This is an experimental API. Subject to change.
         
@@ -554,6 +565,8 @@ class AsyncRaquel(BaseRaquel):
             raise_stop_on_unhandled_exc (bool): Raise a ``StopSubscription``
                 exception if an unhandled exception occurs while processing
                 the job. Defaults to False.
+            newest_first (bool): Take the most recently scheduled job
+                first (LIFO) instead of the oldest one. Defaults to False.
         """
 
         def decorator(
@@ -567,6 +580,7 @@ class AsyncRaquel(BaseRaquel):
                 sleep=sleep,
                 raise_stop_on_unhandled_exc=raise_stop_on_unhandled_exc,
                 reclaim_after=reclaim_after,
+                newest_first=newest_first,
             )
             return fn
         return decorator
@@ -598,6 +612,7 @@ class AsyncRaquel(BaseRaquel):
         expire: bool = True,
         raise_stop_on_unhandled_exc: bool = False,
         reclaim_after: int = 60 * 1000,
+        newest_first: bool = False,
     ) -> AsyncDequeueContextManager:
         """Take the oldest job and process it inside a context manager.
 
@@ -635,6 +650,8 @@ class AsyncRaquel(BaseRaquel):
             raise_stop_on_unhandled_exc (bool): Raise a ``StopSubscription``
                 exception if an unhandled exception occurs while processing
                 the job. Defaults to False.
+            newest_first (bool): Take the most recently scheduled job
+                first (LIFO) instead of the oldest one. Defaults to False.
 
         Yields:
             (Job | None): The oldest job in the queue or None if no job is available.
@@ -647,6 +664,7 @@ class AsyncRaquel(BaseRaquel):
             expire=expire,
             raise_stop_on_unhandled_exc=raise_stop_on_unhandled_exc,
             reclaim_after=reclaim_after,
+            newest_first=newest_first,
         )
 
     async def claim(
@@ -655,6 +673,7 @@ class AsyncRaquel(BaseRaquel):
         before: datetime | int | None = None,
         claim_as: str | None = None,
         reclaim_after: int = 60 * 1000,
+        newest_first: bool = False,
     ) -> Job | None:
         """Claim the oldest job in the queue and lock it for processing.
 
@@ -678,6 +697,8 @@ class AsyncRaquel(BaseRaquel):
                 wasn't processed and the row remains unlocked, then it can
                 be reclaimed after this delay. The delay is calculated from
                 the previous ``claimed_at`` time. Defaults to 1 minute.
+            newest_first (bool): Take the most recently scheduled job
+                first (LIFO) instead of the oldest one. Defaults to False.
 
         Returns:
             (Job | None): The acquired job or None if no job is available.
@@ -708,7 +729,11 @@ class AsyncRaquel(BaseRaquel):
             select_oldest_stmt = (
                 select(RawJob)
                 .where(*where_clause)
-                .order_by(RawJob.scheduled_at)
+                .order_by(
+                    desc(RawJob.scheduled_at)
+                    if newest_first
+                    else RawJob.scheduled_at
+                )
                 .limit(1)
                 .with_for_update(skip_locked=True)
             )
