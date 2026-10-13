@@ -40,6 +40,7 @@ Table of contents
   * [One job per worker](#one-job-per-worker)
   * [Database transactions](#database-transactions)
   * [Sudden shutdown](#sudden-shutdown)
+  * [SQLite](#sqlite)
   * [Retry delay](#retry-delay)
 * [Create jobs table](#create-jobs-table)
   * [Using create_all()](#using-create_all)
@@ -450,9 +451,10 @@ transaction and allows other workers to see that the row is locked.
 In other databases that support this (such as Oracle, MySQL) a similar
 approach is used.
 
-In extremely simple databases, such as SQLite, the fact that the whole
-database is locked during a write operation guarantees that no other worker
-will be able to set the job status to `claimed` at the same time.
+Databases without row locks, such as SQLite, let several workers select
+the same job. That's why a job is only set to `claimed` if it is still
+available at that moment. The first worker gets the job, and the others look
+for another one.
 
 ### Database transactions
 
@@ -488,6 +490,18 @@ worker can claim it and process it.
 If a worker dies while processing a job, the row is unlocked by the database
 but remains in the `claimed` status. Another worker can pick it up and
 process it.
+
+### SQLite
+
+Raquel works with SQLite, with two caveats:
+
+* SQLite doesn't lock rows, so it can't tell a dead worker from a slow one.
+  Once `reclaim_after` has passed (1 minute by default), a job that is still
+  being processed can be claimed by another worker. Set `reclaim_after`
+  longer than your slowest job.
+* Every connection to an in-memory database (`sqlite:///:memory:`) gets its
+  own empty database, so workers running in other threads don't see your
+  jobs. Use a database file instead.
 
 ### Retry delay
 

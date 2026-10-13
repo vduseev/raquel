@@ -736,18 +736,27 @@ class Raquel(BaseRaquel):
                 logger.debug(f"No job available in queue {p.queues}")
                 return None
 
-            # Lock the job
+            # Claim the job, unless another worker claimed it since we
+            # selected it, which can happen in databases without row locks,
+            # such as SQLite. Then look for another job.
             update_claim_stmt = (
                 update(RawJob)
-                .where(RawJob.id == raw_job.id)
+                .where(RawJob.id == raw_job.id, *where_clause)
                 .values(
                     status=self.CLAIMED,
                     claimed_at=p.now_ms,
                     claimed_by=p.claim_as,
                 )
             )
-            session.execute(update_claim_stmt)
+            result = session.execute(update_claim_stmt)
             session.commit()
+            if result.rowcount != 1:
+                return self.claim(
+                    *queues,
+                    before=before,
+                    claim_as=claim_as,
+                    reclaim_after=reclaim_after,
+                )
 
             job = Job.from_raw_job(raw_job)
             job.status = self.CLAIMED
